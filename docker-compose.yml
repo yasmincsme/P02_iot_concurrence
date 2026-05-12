@@ -1,76 +1,272 @@
+# =============================================================================
+# Sistema de Monitoramento do Estreito Marítimo
+# =============================================================================
+# Arquitetura:
+#   - 3 Brokers MQTT independentes (um por setor)
+#   - 3 Gerenciadores de Setor com Ricart-Agrawala
+#   - 5 Drones autônomos distribuídos entre setores
+#   - 6 Sensores marítimos (radar, boia, naval) por setor
+#
+# Sem ponto único de falha: se um broker/setor cair, os demais continuam.
+# Exclusão mútua distribuída via algoritmo de Ricart-Agrawala.
+# =============================================================================
+
 services:
-  broker:
+
+  # ===========================================================================
+  # BROKERS (um por setor — sem ponto único de falha)
+  # ===========================================================================
+
+  broker_1:
     build: ./broker
-    container_name: iot_broker
+    container_name: broker_setor_1
     ports:
-      - "8000:8000"
-      - "9998:9998/tcp"
-    command: python3 iot_broker.py
-
-  light_sensor:
-    build: ./client_sensors/light_sensor
-    container_name: light_sensor
-    command: python3 light_virtual_sensor.py
-    restart: unless-stopped
+      - "1883:1883"
     environment:
-      BROKER_IP: broker
-      BROKER_PORT: "9998"
-
-  temperature_sensor:
-    build: ./client_sensors/temperature_sensor
-    container_name: temperature_sensor
-    command: python3 temperature_virtual_sensor.py 
+      BROKER_PORT: "1883"
     restart: unless-stopped
-    environment:
-      BROKER_IP: broker
-      BROKER_PORT: "9998"
 
-  gas_sensor:
-    build: ./client_sensors/gas_sensor
-    container_name: gas_sensor
-    command: python3 gas_virtual_sensor.py
+  broker_2:
+    build: ./broker
+    container_name: broker_setor_2
+    ports:
+      - "1884:1883"
+    environment:
+      BROKER_PORT: "1883"
     restart: unless-stopped
-    environment:
-      BROKER_IP: broker
-      BROKER_PORT: "9998"
 
-  humidity_sensor:
-    build: ./client_sensors/humidity_sensor
-    container_name: humidity_sensor
-    command: python3 humidity_virtual_sensor.py
+  broker_3:
+    build: ./broker
+    container_name: broker_setor_3
+    ports:
+      - "1885:1883"
+    environment:
+      BROKER_PORT: "1883"
     restart: unless-stopped
-    environment:
-      BROKER_IP: broker
-      BROKER_PORT: "9998"
 
-  act_irrigation:
-    build: ./client_actuators/act_irrigation
-    container_name: act_irrigation
-    command: python3 act_irrigation.py
+  # ===========================================================================
+  # GERENCIADORES DE SETOR (Ricart-Agrawala)
+  # ===========================================================================
+
+  sector_manager_1:
+    build: ./sector_manager
+    container_name: setor_1_manager
+    depends_on:
+      - broker_1
+      - broker_2
+      - broker_3
+    environment:
+      SECTOR_ID:    "1"
+      LOCAL_BROKER: "broker_1"
+      BROKER_PORT:  "1883"
+      RA_PORT:      "5001"
+      # Peers RA dos outros setores
+      PEERS:        "sector_manager_2:5001,sector_manager_3:5001"
+      # Mapa: drone_id:broker_host:broker_port
+      DRONES:       "drone_1:broker_1:1883,drone_2:broker_1:1883,drone_3:broker_2:1883,drone_4:broker_2:1883,drone_5:broker_3:1883"
+      # Todos os brokers para subscrever status de drones
+      ALL_BROKERS:  "broker_1:1883,broker_2:1883,broker_3:1883"
+      REPLY_TIMEOUT: "6.0"
+      MISSION_MIN:  "20"
+      MISSION_MAX:  "60"
+      OCC_MIN:      "25"
+      OCC_MAX:      "60"
     restart: unless-stopped
-    environment:
-      BROKER_IP: broker
-      BROKER_PORT: "9998"
 
-  act_curtain:
-    build: ./client_actuators/act_curtain
-    container_name: act_curtain
-    command: python3 act_curtain.py
+  sector_manager_2:
+    build: ./sector_manager
+    container_name: setor_2_manager
+    depends_on:
+      - broker_1
+      - broker_2
+      - broker_3
+    environment:
+      SECTOR_ID:    "2"
+      LOCAL_BROKER: "broker_2"
+      BROKER_PORT:  "1883"
+      RA_PORT:      "5001"
+      PEERS:        "sector_manager_1:5001,sector_manager_3:5001"
+      DRONES:       "drone_1:broker_1:1883,drone_2:broker_1:1883,drone_3:broker_2:1883,drone_4:broker_2:1883,drone_5:broker_3:1883"
+      ALL_BROKERS:  "broker_1:1883,broker_2:1883,broker_3:1883"
+      REPLY_TIMEOUT: "6.0"
+      MISSION_MIN:  "20"
+      MISSION_MAX:  "60"
+      OCC_MIN:      "30"
+      OCC_MAX:      "70"
     restart: unless-stopped
-    environment:
-      BROKER_IP: broker
-      BROKER_PORT: "9998"
 
-  # client:
-  #   build: ./client
-  #   container_name: iot_dashboard
-  #   command: python3 iot_client.py
-  #   restart: unless-stopped
-  #   environment:
-  #     BROKER_IP: "172.16.201.16"
-  #     BROKER_PORT: "9998"
-  #     DISPLAY: $DISPLAY
-  #     XAUTHORITY: /.Xauthority
-  #   volumes:
-  #     - /tmp/.X11-unix:/tmp/.X11-unix:rw
-  #     - ~/.Xauthority:/.Xauthority:ro
+  sector_manager_3:
+    build: ./sector_manager
+    container_name: setor_3_manager
+    depends_on:
+      - broker_1
+      - broker_2
+      - broker_3
+    environment:
+      SECTOR_ID:    "3"
+      LOCAL_BROKER: "broker_3"
+      BROKER_PORT:  "1883"
+      RA_PORT:      "5001"
+      PEERS:        "sector_manager_1:5001,sector_manager_2:5001"
+      DRONES:       "drone_1:broker_1:1883,drone_2:broker_1:1883,drone_3:broker_2:1883,drone_4:broker_2:1883,drone_5:broker_3:1883"
+      ALL_BROKERS:  "broker_1:1883,broker_2:1883,broker_3:1883"
+      REPLY_TIMEOUT: "6.0"
+      MISSION_MIN:  "20"
+      MISSION_MAX:  "60"
+      OCC_MIN:      "20"
+      OCC_MAX:      "55"
+    restart: unless-stopped
+
+  # ===========================================================================
+  # DRONES (distribuídos entre setores para redundância)
+  # Setor 1: drone_1, drone_2  |  Setor 2: drone_3, drone_4  |  Setor 3: drone_5
+  # ===========================================================================
+
+  drone_1:
+    build: ./drone
+    container_name: drone_1
+    depends_on:
+      - broker_1
+    environment:
+      DRONE_ID:     "drone_1"
+      BROKER_HOST:  "broker_1"
+      BROKER_PORT:  "1883"
+      MISSION_MIN:  "20"
+      MISSION_MAX:  "60"
+      FAILURE_PROB: "0.08"
+    restart: unless-stopped
+
+  drone_2:
+    build: ./drone
+    container_name: drone_2
+    depends_on:
+      - broker_1
+    environment:
+      DRONE_ID:     "drone_2"
+      BROKER_HOST:  "broker_1"
+      BROKER_PORT:  "1883"
+      MISSION_MIN:  "20"
+      MISSION_MAX:  "60"
+      FAILURE_PROB: "0.08"
+    restart: unless-stopped
+
+  drone_3:
+    build: ./drone
+    container_name: drone_3
+    depends_on:
+      - broker_2
+    environment:
+      DRONE_ID:     "drone_3"
+      BROKER_HOST:  "broker_2"
+      BROKER_PORT:  "1883"
+      MISSION_MIN:  "20"
+      MISSION_MAX:  "60"
+      FAILURE_PROB: "0.08"
+    restart: unless-stopped
+
+  drone_4:
+    build: ./drone
+    container_name: drone_4
+    depends_on:
+      - broker_2
+    environment:
+      DRONE_ID:     "drone_4"
+      BROKER_HOST:  "broker_2"
+      BROKER_PORT:  "1883"
+      MISSION_MIN:  "20"
+      MISSION_MAX:  "60"
+      FAILURE_PROB: "0.08"
+    restart: unless-stopped
+
+  drone_5:
+    build: ./drone
+    container_name: drone_5
+    depends_on:
+      - broker_3
+    environment:
+      DRONE_ID:     "drone_5"
+      BROKER_HOST:  "broker_3"
+      BROKER_PORT:  "1883"
+      MISSION_MIN:  "20"
+      MISSION_MAX:  "60"
+      FAILURE_PROB: "0.08"
+    restart: unless-stopped
+
+  # ===========================================================================
+  # SENSORES MARÍTIMOS (sem interface gráfica — geração autônoma de dados)
+  # ===========================================================================
+
+  # ── Setor 1 ─────────────────────────────────────────────────────────────────
+  radar_1:
+    build: ./sensors/radar
+    container_name: radar_setor_1
+    depends_on:
+      - broker_1
+    environment:
+      BROKER_HOST: "broker_1"
+      BROKER_PORT: "1883"
+      SECTOR_ID:   "1"
+      INTERVAL:    "4"
+    restart: unless-stopped
+
+  buoy_1:
+    build: ./sensors/buoy
+    container_name: buoy_setor_1
+    depends_on:
+      - broker_1
+    environment:
+      BROKER_HOST: "broker_1"
+      BROKER_PORT: "1883"
+      SECTOR_ID:   "1"
+      INTERVAL:    "6"
+    restart: unless-stopped
+
+  # ── Setor 2 ─────────────────────────────────────────────────────────────────
+  radar_2:
+    build: ./sensors/radar
+    container_name: radar_setor_2
+    depends_on:
+      - broker_2
+    environment:
+      BROKER_HOST: "broker_2"
+      BROKER_PORT: "1883"
+      SECTOR_ID:   "2"
+      INTERVAL:    "4"
+    restart: unless-stopped
+
+  naval_2:
+    build: ./sensors/naval
+    container_name: naval_setor_2
+    depends_on:
+      - broker_2
+    environment:
+      BROKER_HOST: "broker_2"
+      BROKER_PORT: "1883"
+      SECTOR_ID:   "2"
+      INTERVAL:    "5"
+    restart: unless-stopped
+
+  # ── Setor 3 ─────────────────────────────────────────────────────────────────
+  buoy_3:
+    build: ./sensors/buoy
+    container_name: buoy_setor_3
+    depends_on:
+      - broker_3
+    environment:
+      BROKER_HOST: "broker_3"
+      BROKER_PORT: "1883"
+      SECTOR_ID:   "3"
+      INTERVAL:    "6"
+    restart: unless-stopped
+
+  naval_3:
+    build: ./sensors/naval
+    container_name: naval_setor_3
+    depends_on:
+      - broker_3
+    environment:
+      BROKER_HOST: "broker_3"
+      BROKER_PORT: "1883"
+      SECTOR_ID:   "3"
+      INTERVAL:    "5"
+    restart: unless-stopped
