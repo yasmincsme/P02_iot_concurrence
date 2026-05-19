@@ -1,8 +1,12 @@
 """
-iot_broker.py - Broker MQTT sobre TCP
+iot_broker.py - Broker MQTT sobre TCP + UDP
 
-Suporta: CONNECT/CONNACK, PUBLISH (QoS 0/1), SUBSCRIBE/SUBACK,
-         UNSUBSCRIBE, PINGREQ/PINGRESP, DISCONNECT.
+TCP: CONNECT/CONNACK, PUBLISH (QoS 0/1), SUBSCRIBE/SUBACK,
+     UNSUBSCRIBE, PINGREQ/PINGRESP, DISCONNECT.
+UDP: PUBLISH QoS 0 (sensores — fire and forget, sem handshake).
+
+Ambos escutam na mesma porta (BROKER_PORT). TCP e UDP coexistem
+na mesma porta pois são protocolos distintos no SO.
 
 Wildcards: + (um nível) e # (zero ou mais níveis).
 Mensagens retained: última mensagem por tópico, entregue a novos subscribers.
@@ -241,15 +245,68 @@ def _handle(sock: socket.socket, addr):
 
 
 # ---------------------------------------------------------------------------
+# UDP — recepção de PUBLISH de sensores
+# ---------------------------------------------------------------------------
+# Sensores fazem handshake TCP (CONNECT/CONNACK) mas enviam dados via UDP.
+# O datagrama tem o mesmo formato do MQTT PUBLISH QoS 0:
+#   [0x30][remaining_len][topic_len_hi][topic_len_lo][topic][payload]
+#
+# src_id="" ao chamar _route: sensores não subscrevem nada, então não há
+# ninguém a excluir do roteamento.
+
+def _parse_udp(data: bytes):
+    """Retorna (topic, payload) de um datagrama MQTT PUBLISH QoS 0, ou (None, None)."""
+    if len(data) < 4 or (data[0] >> 4) != 3:
+        return None, None
+    # Decodificar remaining length (mesmo algoritmo do codec TCP)
+    i, mult, val = 1, 1, 0
+    for _ in range(4):
+        if i >= len(data):
+            return None, None
+        byte = data[i]; i += 1
+        val += (byte & 0x7F) * mult
+        if not (byte & 0x80):
+            break
+        mult <<= 7
+    if i + 2 > len(data):
+        return None, None
+    tlen    = (data[i] << 8) | data[i + 1]; i += 2
+    if i + tlen > len(data):
+        return None, None
+    topic   = data[i: i + tlen].decode("utf-8")
+    payload = data[i + tlen:]
+    return topic, payload
+
+
+def _udp_listener():
+    """Thread que escuta datagramas UDP e roteia como PUBLISH."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((HOST, PORT))
+    log.info(f"UDP listener em {HOST}:{PORT}")
+    while True:
+        try:
+            data, addr = sock.recvfrom(65535)
+            topic, payload = _parse_udp(data)
+            if topic is not None:
+                log.debug(f"UDP {addr} → {topic} ({len(payload)} B)")
+                _route(topic, payload, "")
+        except Exception as e:
+            log.warning(f"UDP erro: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 def main():
+    threading.Thread(target=_udp_listener, daemon=True).start()
+
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind((HOST, PORT))
     srv.listen(MAX_LISTEN)
-    log.info(f"MQTT Broker TCP em {HOST}:{PORT}")
+    log.info(f"TCP Broker em {HOST}:{PORT}")
     while True:
         conn, addr = srv.accept()
         threading.Thread(target=_handle, args=(conn, addr), daemon=True).start()

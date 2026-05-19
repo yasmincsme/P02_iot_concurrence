@@ -1,0 +1,417 @@
+"""
+monitor.py – Monitor TUI do Sistema de Estreito Marítimo
+
+Conecta-se aos 3 brokers MQTT e exibe um painel em tempo real:
+  - Status dos 3 setores (online / offline)
+  - Estado dos 8 drones (disponível / missão / offline)
+  - Últimos eventos: ocorrências detectadas e despachos
+  - Dados dos 6 sensores (radar, boia, naval)
+
+Para rodar dentro do Docker:
+  docker compose run --rm -it monitor
+
+Para rodar localmente (com o sistema rodando via docker-compose):
+  BROKER_1_HOST=localhost BROKER_1_PORT=1883 \\
+  BROKER_2_HOST=localhost BROKER_2_PORT=1884 \\
+  BROKER_3_HOST=localhost BROKER_3_PORT=1885 \\
+  python monitor/monitor.py
+
+Tecla 'q' encerra.
+"""
+
+import curses
+import threading
+import json
+import time
+import socket
+import os
+from collections import deque
+from datetime import datetime
+
+# ── Configuração dos 3 brokers ────────────────────────────────────────────────
+
+BROKERS = [
+    (os.environ.get("BROKER_1_HOST", "broker_1"), int(os.environ.get("BROKER_1_PORT", "1883"))),
+    (os.environ.get("BROKER_2_HOST", "broker_2"), int(os.environ.get("BROKER_2_PORT", "1883"))),
+    (os.environ.get("BROKER_3_HOST", "broker_3"), int(os.environ.get("BROKER_3_PORT", "1883"))),
+]
+
+# Setor base de cada drone (drone_1..3 → S1, drone_4..6 → S2, drone_7..8 → S3)
+DRONE_HOME = {f"drone_{i}": (1 if i <= 3 else 2 if i <= 6 else 3) for i in range(1, 9)}
+
+# ── Estado global (atualizado pelas threads MQTT, lido pela thread de desenho) ─
+
+_lock  = threading.Lock()
+_state = {
+    "drones": {},       # drone_id → {"status": str, "mission": str|None, "ts": float}
+    "sectors": {        # setor → {"online": bool, "sensors": {tipo → dados}}
+        1: {"online": False, "sensors": {}},
+        2: {"online": False, "sensors": {}},
+        3: {"online": False, "sensors": {}},
+    },
+    "events": deque(maxlen=10),   # ocorrências e despachos recentes
+}
+
+
+# ── Codec MQTT mínimo (mesmo padrão dos outros módulos) ──────────────────────
+# O protocolo MQTT usa um campo "remaining length" codificado em 1-4 bytes
+# com bit 7 indicando continuação. As funções abaixo implementam esse codec.
+
+def _enc_rem(n):
+    out = bytearray()
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        if n:
+            b |= 0x80
+        out.append(b)
+        if not n:
+            break
+    return bytes(out)
+
+
+def _dec_rem(sock):
+    mult, val = 1, 0
+    for _ in range(4):
+        b = sock.recv(1)
+        if not b:
+            return None
+        byte = b[0]
+        val += (byte & 0x7F) * mult
+        if not (byte & 0x80):
+            return val
+        mult <<= 7
+    return None
+
+
+def _read_exact(sock, n):
+    buf = b""
+    while len(buf) < n:
+        c = sock.recv(n - len(buf))
+        if not c:
+            return None
+        buf += c
+    return buf
+
+
+def _topic_matches(pattern, topic):
+    def m(p, t):
+        if not p:
+            return not t
+        if p[0] == "#":
+            return True
+        if not t:
+            return p == ["#"]
+        if p[0] in ("+", t[0]):
+            return m(p[1:], t[1:])
+        return False
+    return pattern == topic or m(pattern.split("/"), topic.split("/"))
+
+
+# ── Processador de mensagens ──────────────────────────────────────────────────
+
+def _on_message(topic, payload):
+    """Atualiza o estado global com base na mensagem MQTT recebida."""
+    try:
+        data = json.loads(payload)
+    except Exception:
+        return
+
+    parts = topic.split("/")
+
+    with _lock:
+        # strait/drones/{id}/status  →  atualiza estado do drone
+        if len(parts) == 4 and parts[1] == "drones" and parts[3] == "status":
+            did = parts[2]
+            _state["drones"][did] = {
+                "status":  data.get("status", "?"),
+                "mission": data.get("mission"),
+                "ts":      data.get("timestamp", time.time()),
+            }
+
+        # strait/sector/{n}/occurrence  →  registra ocorrência detectada
+        elif len(parts) == 4 and parts[1] == "sector" and parts[3] == "occurrence":
+            _state["events"].appendleft({
+                "ts":     time.time(),
+                "kind":   "occ",
+                "sector": int(parts[2]),
+                "id":     data.get("id", "?"),
+                "type":   data.get("type", "?"),
+                "crit":   data.get("criticality", 0),
+                "drone":  None,
+            })
+
+        # strait/drones/{id}/dispatch  →  registra despacho de drone
+        elif len(parts) == 4 and parts[1] == "drones" and parts[3] == "dispatch":
+            _state["events"].appendleft({
+                "ts":     time.time(),
+                "kind":   "dispatch",
+                "sector": data.get("sector_id", "?"),
+                "id":     data.get("occurrence_id", "?"),
+                "type":   data.get("occurrence_type", "?"),
+                "crit":   data.get("criticality", 0),
+                "drone":  data.get("drone_id", "?"),
+            })
+
+        # strait/sector/{n}/sensors/{type}  →  atualiza dado do sensor
+        elif len(parts) == 5 and parts[3] == "sensors":
+            sn = int(parts[2])
+            _state["sectors"][sn]["sensors"][parts[4]] = data
+
+
+# ── Thread de conexão MQTT por broker ────────────────────────────────────────
+# Cada thread:
+#   1. Conecta ao broker do setor
+#   2. Subscreve aos tópicos relevantes para aquele setor
+#   3. Fica em loop lendo pacotes e chamando _on_message()
+#   4. Em caso de falha, espera 5s e tenta reconectar
+
+def _mqtt_thread(idx, host, port):
+    sector_n  = idx + 1
+    client_id = f"monitor_s{sector_n}"
+
+    # Cada thread de broker subscreve apenas ao que é publicado naquele broker:
+    #   - Status de drones conectados a este broker (retained)
+    #   - Despachos para drones deste broker
+    #   - Ocorrências e sensores do setor correspondente
+    topics = [
+        "strait/drones/+/status",       # status dos drones (retained)
+        "strait/drones/+/dispatch",     # comandos de despacho
+        f"strait/sector/{sector_n}/occurrence",
+        f"strait/sector/{sector_n}/sensors/+",
+    ]
+
+    while True:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            sock.connect((host, port))
+            sock.settimeout(None)
+
+            # Pacote CONNECT
+            cid = client_id.encode()
+            var = b"\x00\x04MQTT\x04\x02\x00\x3c" + bytes([len(cid) >> 8, len(cid) & 0xFF]) + cid
+            sock.sendall(bytes([0x10]) + _enc_rem(len(var)) + var)
+            ack = _read_exact(sock, 4)
+            if not ack or ack[3] != 0:
+                raise ConnectionError("CONNACK falhou")
+
+            with _lock:
+                _state["sectors"][sector_n]["online"] = True
+
+            # Enviar SUBSCRIBE para cada tópico
+            for i, topic in enumerate(topics, start=1):
+                tb  = topic.encode()
+                var = bytes([0, i, len(tb) >> 8, len(tb) & 0xFF]) + tb + b"\x00"
+                sock.sendall(bytes([0x82]) + _enc_rem(len(var)) + var)
+
+            # Loop de leitura de pacotes
+            while True:
+                hdr = sock.recv(1)
+                if not hdr:
+                    break
+                ptype = (hdr[0] >> 4) & 0x0F
+                flags = hdr[0] & 0x0F
+                rem   = _dec_rem(sock)
+                if rem is None:
+                    break
+                data = _read_exact(sock, rem) if rem else b""
+                if data is None:
+                    break
+
+                if ptype == 3:   # PUBLISH — mensagem recebida
+                    qos  = (flags >> 1) & 0x03
+                    tlen = (data[0] << 8) | data[1]
+                    top  = data[2:2 + tlen].decode()
+                    off  = 2 + tlen
+                    if qos > 0:   # QoS 1: responder PUBACK
+                        mid = (data[off] << 8) | data[off + 1]
+                        off += 2
+                        sock.sendall(bytes([0x40, 0x02, mid >> 8, mid & 0xFF]))
+                    _on_message(top, data[off:])
+                elif ptype == 12:   # PINGREQ — responder PINGRESP
+                    sock.sendall(bytes([0xD0, 0x00]))
+                # ptype == 9 é SUBACK — ignorar (só confirmação de inscrição)
+
+        except Exception:
+            pass
+        finally:
+            with _lock:
+                _state["sectors"][sector_n]["online"] = False
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+        time.sleep(5)   # espera antes de reconectar
+
+
+# ── Interface TUI com curses ──────────────────────────────────────────────────
+# curses.wrapper() cuida de inicializar/restaurar o terminal automaticamente.
+# O loop principal redesenha a tela a cada 400ms (stdscr.timeout(400)).
+
+def _draw(stdscr):
+    curses.start_color()
+    curses.use_default_colors()
+    curses.init_pair(1, curses.COLOR_GREEN,  -1)   # disponível / online
+    curses.init_pair(2, curses.COLOR_RED,    -1)   # offline / crítico
+    curses.init_pair(3, curses.COLOR_YELLOW, -1)   # missão / atenção
+    curses.init_pair(4, curses.COLOR_CYAN,   -1)   # cabeçalho
+
+    GREEN  = curses.color_pair(1)
+    RED    = curses.color_pair(2)
+    YELLOW = curses.color_pair(3)
+    CYAN   = curses.color_pair(4)
+    BOLD   = curses.A_BOLD
+
+    curses.curs_set(0)      # esconde o cursor
+    stdscr.timeout(400)     # getch() retorna a cada 400ms mesmo sem tecla
+
+    def put(r, c, text, attr=0):
+        """Escreve texto ignorando erros de borda de tela."""
+        try:
+            stdscr.addstr(r, c, str(text), attr)
+        except curses.error:
+            pass
+
+    while True:
+        if stdscr.getch() == ord('q'):
+            break
+
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+
+        # Snapshot thread-safe do estado (lê uma vez, desenha sem travar)
+        with _lock:
+            drones  = dict(_state["drones"])
+            sectors = {k: {"online": v["online"], "sensors": dict(v["sensors"])}
+                       for k, v in _state["sectors"].items()}
+            events  = list(_state["events"])
+
+        r = 0
+
+        # ── Cabeçalho ──────────────────────────────────────────────────────
+        title = "MONITORAMENTO DO ESTREITO MARITIMO"
+        ts    = datetime.now().strftime("%H:%M:%S")
+        put(r, 0, "=" * w, CYAN)
+        put(r, max(0, (w - len(title)) // 2), title, CYAN | BOLD)
+        put(r, max(0, w - 9), ts, CYAN)
+        r += 1
+
+        # ── Setores ────────────────────────────────────────────────────────
+        put(r, 0, " SETORES", BOLD)
+        r += 1
+        sensor_labels = {1: "radar + boia", 2: "radar + naval", 3: "boia + naval"}
+        for sn in (1, 2, 3):
+            ok    = sectors[sn]["online"]
+            mark  = "*" if ok else "o"
+            color = GREEN if ok else RED
+            line  = f"  [S{sn}] {mark} {'ONLINE ' if ok else 'OFFLINE'}  sensores: {sensor_labels[sn]}"
+            put(r, 0, line, color | BOLD)
+            r += 1
+        put(r, 0, "-" * w)
+        r += 1
+
+        # ── Drones ─────────────────────────────────────────────────────────
+        # Exibidos em grade de 2 colunas para economizar espaço vertical
+        put(r, 0, " DRONES (8)", BOLD)
+        r += 1
+        col_w   = w // 2
+        drone_ids = [f"drone_{i}" for i in range(1, 9)]
+        for i in range(0, len(drone_ids), 2):
+            for col, did in enumerate(drone_ids[i:i+2]):
+                info = drones.get(did, {})
+                st   = info.get("status", "desconhecido")
+                ms   = (info.get("mission") or "")[:16]
+                home = DRONE_HOME.get(did, "?")
+                if st == "available":
+                    color = GREEN
+                    lbl   = f"  {did} [S{home}] DISPONIVEL"
+                elif st == "busy":
+                    color = YELLOW
+                    lbl   = f"  {did} [S{home}] MISSAO {ms}"
+                elif st == "offline":
+                    color = RED
+                    lbl   = f"  {did} [S{home}] OFFLINE"
+                else:
+                    color = 0
+                    lbl   = f"  {did} [S{home}] {st.upper()}"
+                put(r, col * col_w, lbl[:col_w - 1], color)
+            r += 1
+        put(r, 0, "-" * w)
+        r += 1
+
+        # ── Últimos eventos ────────────────────────────────────────────────
+        # Ocorrências aparecem quando o sector_manager as detecta e enfileira.
+        # Despachos aparecem quando o sector_manager envia o comando ao drone.
+        put(r, 0, " ULTIMOS EVENTOS  (occ=ocorrencia detectada  >>>=despachado)", BOLD)
+        r += 1
+        for ev in events[:7]:
+            ts_s = datetime.fromtimestamp(ev["ts"]).strftime("%H:%M:%S")
+            crit = ev.get("crit", 0)
+            occ_t = ev.get("type", "?")[:26]
+            sec  = ev.get("sector", "?")
+            oid  = ev.get("id", "?")[:18]
+            if ev["kind"] == "dispatch":
+                drone = ev.get("drone", "?")
+                line  = f"  {ts_s} [S{sec}] {oid:<18} {occ_t:<26} crit={crit} >>> {drone}"
+                color = YELLOW
+            else:
+                line  = f"  {ts_s} [S{sec}] {oid:<18} {occ_t:<26} crit={crit}"
+                color = RED if crit >= 4 else 0
+            put(r, 0, line[:w - 1], color)
+            r += 1
+        put(r, 0, "-" * w)
+        r += 1
+
+        # ── Sensores ───────────────────────────────────────────────────────
+        put(r, 0, " SENSORES (ultima leitura)", BOLD)
+        r += 1
+        sensor_order = [(1, "radar"), (1, "buoy"), (2, "radar"),
+                        (2, "naval"), (3, "buoy"),  (3, "naval")]
+        for sn, stype in sensor_order:
+            sd = sectors[sn]["sensors"].get(stype)
+            if not sd:
+                continue
+            anomaly = sd.get("anomaly", False)
+            color   = RED if anomaly else 0
+            if stype == "radar":
+                line = (f"  radar_s{sn}: {sd.get('vessel_count','?')} emb."
+                        f"  {sd.get('avg_speed_kn','?')}kn"
+                        f"  {sd.get('bearing_deg','?')}deg")
+            elif stype == "buoy":
+                line = (f"  buoy_s{sn}:  ondas={sd.get('wave_height_m','?')}m"
+                        f"  corrente={sd.get('current_kn','?')}kn"
+                        f"  temp={sd.get('water_temp_c','?')}C")
+            else:
+                mag  = "ALERTA" if sd.get("magnetic_anomaly") else "OK"
+                line = (f"  naval_s{sn}: {sd.get('acoustic_db','?')}dB"
+                        f"  contatos={sd.get('surface_contacts','?')}"
+                        f"  mag={mag}")
+            if anomaly:
+                line += f"  ! {sd.get('alert', '')}"
+            put(r, 0, line[:w - 1], color)
+            r += 1
+
+        # ── Rodapé ─────────────────────────────────────────────────────────
+        put(h - 1, 0, "=" * w, CYAN)
+        put(h - 1, 0, " [q] sair", CYAN)
+
+        stdscr.refresh()
+
+
+# ── Ponto de entrada ─────────────────────────────────────────────────────────
+
+def main():
+    # Inicia uma thread MQTT por broker (independentes — sem ponto único de falha)
+    for i, (host, port) in enumerate(BROKERS):
+        threading.Thread(target=_mqtt_thread, args=(i, host, port), daemon=True).start()
+
+    # Aguarda 1.5s para receber as retained messages dos drones antes de abrir a TUI
+    time.sleep(1.5)
+
+    curses.wrapper(_draw)
+
+
+if __name__ == "__main__":
+    main()

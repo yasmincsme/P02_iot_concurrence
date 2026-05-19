@@ -7,6 +7,10 @@ Gera dados simulados de boia marítima de forma autônoma:
   - Temperatura da água (°C)
   - Visibilidade (milhas náuticas)
   - Anomalias: ondas altas, baixa visibilidade, corrente forte
+
+Comunicação:
+  - Handshake inicial: TCP CONNECT → CONNACK
+  - Envio de dados:    UDP PUBLISH (fire-and-forget)
 """
 
 import socket
@@ -16,12 +20,12 @@ import random
 import logging
 import os
 
-BROKER_IP  = os.environ.get("BROKER_HOST", "localhost")
-PORT       = int(os.environ.get("BROKER_PORT", "1883"))
-SECTOR_ID  = os.environ.get("SECTOR_ID", "1")
-CLIENT_ID  = f"buoy_s{SECTOR_ID}"
-TOPIC      = f"strait/sector/{SECTOR_ID}/sensors/buoy"
-INTERVAL   = float(os.environ.get("INTERVAL", "6"))
+BROKER_IP = os.environ.get("BROKER_HOST", "localhost")
+PORT      = int(os.environ.get("BROKER_PORT", "1883"))
+SECTOR_ID = os.environ.get("SECTOR_ID", "1")
+CLIENT_ID = f"buoy_s{SECTOR_ID}"
+TOPIC     = f"strait/sector/{SECTOR_ID}/sensors/buoy"
+INTERVAL  = float(os.environ.get("INTERVAL", "6"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -58,10 +62,10 @@ def build_publish(topic, payload):
 
 class BuoySensor:
     def __init__(self):
-        self.wave_height    = random.uniform(0.3, 1.5)  # metros
-        self.current_speed  = random.uniform(0.2, 1.5)  # nós
-        self.water_temp     = random.uniform(18, 26)     # °C
-        self.visibility     = random.uniform(5, 10)      # milhas náuticas
+        self.wave_height   = random.uniform(0.3, 1.5)
+        self.current_speed = random.uniform(0.2, 1.5)
+        self.water_temp    = random.uniform(18, 26)
+        self.visibility    = random.uniform(5, 10)
 
     def read(self):
         self.wave_height   = max(0.1, min(8.0, self.wave_height + random.uniform(-0.3, 0.3)))
@@ -71,7 +75,6 @@ class BuoySensor:
 
         anomaly = False
         alert   = None
-
         if self.wave_height > 5.0:
             anomaly = True
             alert   = "ondas_criticas"
@@ -96,39 +99,46 @@ class BuoySensor:
 
 
 def run():
-    sensor = BuoySensor()
+    sensor   = BuoySensor()
+    udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     log.info(f"Boia inteligente iniciada | tópico: {TOPIC}")
 
+    # ── Handshake TCP inicial ────────────────────────────────────────────────
     while True:
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.connect((BROKER_IP, PORT))
-            sock.sendall(build_connect(CLIENT_ID))
-            time.sleep(0.5)
-            log.info(f"Conectada ao broker {BROKER_IP}:{PORT}")
-
-            while True:
-                data   = sensor.read()
-                packet = build_publish(TOPIC, json.dumps(data).encode())
-                sock.sendall(packet)
-                if data["anomaly"]:
-                    log.warning(f"ANOMALIA: {data['alert']} | ondas={data['wave_height_m']}m vis={data['visibility_nmi']}nmi")
-                else:
-                    log.info(
-                        f"ondas={data['wave_height_m']}m "
-                        f"corrente={data['current_kn']}kn "
-                        f"vis={data['visibility_nmi']}nmi "
-                        f"temp={data['water_temp_c']}°C"
-                    )
-                time.sleep(INTERVAL)
-
+            tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            tcp.settimeout(5)
+            tcp.connect((BROKER_IP, PORT))
+            tcp.sendall(build_connect(CLIENT_ID))
+            ack = tcp.recv(4)
+            tcp.close()
+            if ack and len(ack) >= 4 and ack[3] == 0:
+                log.info(f"Handshake TCP OK com {BROKER_IP}:{PORT} | publicando via UDP")
+                break
+            raise ConnectionError("CONNACK inválido")
         except Exception as e:
-            log.warning(f"Erro de conexão: {e}, reconectando em 5s")
+            log.warning(f"Broker indisponível: {e}, tentando em 5s")
             try:
-                sock.close()
+                tcp.close()
             except Exception:
                 pass
             time.sleep(5)
+
+    # ── Loop de publicação UDP ────────────────────────────────────────────────
+    while True:
+        data   = sensor.read()
+        packet = build_publish(TOPIC, json.dumps(data).encode())
+        udp_sock.sendto(packet, (BROKER_IP, PORT))
+        if data["anomaly"]:
+            log.warning(f"ANOMALIA: {data['alert']} | ondas={data['wave_height_m']}m vis={data['visibility_nmi']}nmi")
+        else:
+            log.info(
+                f"ondas={data['wave_height_m']}m "
+                f"corrente={data['current_kn']}kn "
+                f"vis={data['visibility_nmi']}nmi "
+                f"temp={data['water_temp_c']}°C"
+            )
+        time.sleep(INTERVAL)
 
 
 if __name__ == "__main__":

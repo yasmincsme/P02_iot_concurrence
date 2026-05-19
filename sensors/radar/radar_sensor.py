@@ -6,6 +6,10 @@ Gera dados simulados de radar naval de forma autônoma:
   - Velocidade média das embarcações
   - Direção predominante do tráfego (bearing 0-360°)
   - Anomalias: pico de tráfego, velocidade incomum
+
+Comunicação:
+  - Handshake inicial: TCP CONNECT → CONNACK (confirma que o broker está vivo)
+  - Envio de dados:    UDP PUBLISH  (fire-and-forget, sem overhead de conexão)
 """
 
 import socket
@@ -15,12 +19,12 @@ import random
 import logging
 import os
 
-BROKER_IP  = os.environ.get("BROKER_HOST", "localhost")
-PORT       = int(os.environ.get("BROKER_PORT", "1883"))
-SECTOR_ID  = os.environ.get("SECTOR_ID", "1")
-CLIENT_ID  = f"radar_s{SECTOR_ID}"
-TOPIC      = f"strait/sector/{SECTOR_ID}/sensors/radar"
-INTERVAL   = float(os.environ.get("INTERVAL", "4"))
+BROKER_IP = os.environ.get("BROKER_HOST", "localhost")
+PORT      = int(os.environ.get("BROKER_PORT", "1883"))
+SECTOR_ID = os.environ.get("SECTOR_ID", "1")
+CLIENT_ID = f"radar_s{SECTOR_ID}"
+TOPIC     = f"strait/sector/{SECTOR_ID}/sensors/radar"
+INTERVAL  = float(os.environ.get("INTERVAL", "4"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,6 +54,7 @@ def build_connect(client_id):
 
 
 def build_publish(topic, payload):
+    """Monta pacote MQTT PUBLISH QoS 0 — mesmo formato para TCP e UDP."""
     tb  = topic.encode()
     var = bytes([len(tb) >> 8, len(tb) & 0xFF]) + tb + payload
     return bytes([0x30]) + _enc_rem(len(var)) + var
@@ -59,23 +64,18 @@ class RadarSensor:
     def __init__(self):
         self.vessel_count = random.randint(3, 12)
         self.bearing      = random.uniform(0, 360)
-        self.avg_speed    = random.uniform(8, 18)   # knots
+        self.avg_speed    = random.uniform(8, 18)
 
     def read(self):
-        # Deriva suave do tráfego
         self.vessel_count = max(0, min(30, self.vessel_count + random.randint(-2, 2)))
         self.bearing      = (self.bearing + random.uniform(-5, 5)) % 360
         self.avg_speed    = max(2, min(35, self.avg_speed + random.uniform(-1.5, 1.5)))
 
         anomaly = False
         alert   = None
-
-        # Congestionamento (tráfego acima do normal)
         if self.vessel_count > 22:
             anomaly = True
             alert   = "congestionamento_detectado"
-
-        # Velocidade incomum (muito rápido ou muito devagar)
         if self.avg_speed > 28 or (self.vessel_count > 0 and self.avg_speed < 3):
             anomaly = True
             alert   = "velocidade_anomala"
@@ -93,38 +93,49 @@ class RadarSensor:
 
 
 def run():
-    sensor = RadarSensor()
+    sensor   = RadarSensor()
+    udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     log.info(f"Radar costeiro iniciado | tópico: {TOPIC}")
 
+    # ── Handshake TCP inicial ────────────────────────────────────────────────
+    # Garante que o broker está disponível antes de começar a publicar.
+    # Tenta indefinidamente com intervalo de 5s até conseguir.
     while True:
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.connect((BROKER_IP, PORT))
-            sock.sendall(build_connect(CLIENT_ID))
-            time.sleep(0.5)
-            log.info(f"Conectado ao broker {BROKER_IP}:{PORT}")
-
-            while True:
-                data   = sensor.read()
-                packet = build_publish(TOPIC, json.dumps(data).encode())
-                sock.sendall(packet)
-                if data["anomaly"]:
-                    log.warning(f"ANOMALIA: {data['alert']} | embarcações={data['vessel_count']}")
-                else:
-                    log.info(
-                        f"embarcações={data['vessel_count']} "
-                        f"velocidade={data['avg_speed_kn']}kn "
-                        f"bearing={data['bearing_deg']}°"
-                    )
-                time.sleep(INTERVAL)
-
+            tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            tcp.settimeout(5)
+            tcp.connect((BROKER_IP, PORT))
+            tcp.sendall(build_connect(CLIENT_ID))
+            ack = tcp.recv(4)
+            tcp.close()
+            if ack and len(ack) >= 4 and ack[3] == 0:
+                log.info(f"Handshake TCP OK com {BROKER_IP}:{PORT} | publicando via UDP")
+                break
+            raise ConnectionError("CONNACK inválido")
         except Exception as e:
-            log.warning(f"Erro de conexão: {e}, reconectando em 5s")
+            log.warning(f"Broker indisponível: {e}, tentando em 5s")
             try:
-                sock.close()
+                tcp.close()
             except Exception:
                 pass
             time.sleep(5)
+
+    # ── Loop de publicação UDP ────────────────────────────────────────────────
+    # Fire-and-forget: se o broker cair, os pacotes são perdidos (aceitável).
+    # Quando o broker voltar, os próximos datagramas chegam normalmente.
+    while True:
+        data   = sensor.read()
+        packet = build_publish(TOPIC, json.dumps(data).encode())
+        udp_sock.sendto(packet, (BROKER_IP, PORT))
+        if data["anomaly"]:
+            log.warning(f"ANOMALIA: {data['alert']} | embarcações={data['vessel_count']}")
+        else:
+            log.info(
+                f"embarcações={data['vessel_count']} "
+                f"velocidade={data['avg_speed_kn']}kn "
+                f"bearing={data['bearing_deg']}°"
+            )
+        time.sleep(INTERVAL)
 
 
 if __name__ == "__main__":

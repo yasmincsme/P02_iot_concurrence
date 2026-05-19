@@ -452,7 +452,9 @@ class SectorManager:
 
         # ── Estado dos drones ─────────────────────────────────────────────
         # "available" | "busy" | "requesting" | "offline"
-        self.drone_status = {d: "available" for d in self.drone_map}
+        # Inicia como "offline": só muda quando o drone publica seu status via MQTT
+        # (drones publicam com retain=True, então chega logo após subscrever)
+        self.drone_status = {d: "offline" for d in self.drone_map}
         self.drone_lock   = threading.Lock()
 
         # ── Fila de ocorrências ───────────────────────────────────────────
