@@ -656,15 +656,13 @@ class SectorManager:
 
     def _check_sensor_anomaly(self, sensor_type: str, data: dict):
         """Detecta anomalias nos dados de sensores e gera ocorrências."""
-        # Probabilidade base de anomalia por tipo de sensor
-        thresholds = {"radar": 0.04, "buoy": 0.03, "naval": 0.05}
+        thresholds = {"radar": 0.04, "buoy": 0.03}
         chance = thresholds.get(sensor_type, 0.02)
 
         if random.random() < chance:
             occ_candidates = {
                 "radar": ["objeto_nao_identificado", "bloqueio_de_rota", "congestionamento"],
                 "buoy":  ["risco_ambiental", "falha_de_sinalizacao"],
-                "naval": ["objeto_nao_identificado", "embarcacao_a_deriva"],
             }
             occ_type = random.choice(occ_candidates.get(sensor_type, ["inspecao_urgente"]))
             self._enqueue_occurrence(occ_type, f"anomalia em sensor {sensor_type}")

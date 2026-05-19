@@ -1,11 +1,11 @@
 """
 monitor.py – Monitor TUI do Sistema de Estreito Marítimo
 
-Conecta-se aos 3 brokers MQTT e exibe um painel em tempo real:
-  - Status dos 3 setores (online / offline)
+Conecta-se aos 4 brokers MQTT e exibe um painel em tempo real:
+  - Status dos 4 setores (online / offline)
   - Estado dos 8 drones (disponível / missão / offline)
   - Últimos eventos: ocorrências detectadas e despachos
-  - Dados dos 6 sensores (radar, boia, naval)
+  - Dados dos 8 sensores (radar, boia)
 
 Para rodar dentro do Docker:
   docker compose run --rm -it monitor
@@ -14,6 +14,7 @@ Para rodar localmente (com o sistema rodando via docker-compose):
   BROKER_1_HOST=localhost BROKER_1_PORT=1883 \\
   BROKER_2_HOST=localhost BROKER_2_PORT=1884 \\
   BROKER_3_HOST=localhost BROKER_3_PORT=1885 \\
+  BROKER_4_HOST=localhost BROKER_4_PORT=1886 \\
   python monitor/monitor.py
 
 Tecla 'q' encerra.
@@ -28,16 +29,22 @@ import os
 from collections import deque
 from datetime import datetime
 
-# ── Configuração dos 3 brokers ────────────────────────────────────────────────
+# ── Configuração dos 4 brokers ────────────────────────────────────────────────
 
 BROKERS = [
     (os.environ.get("BROKER_1_HOST", "broker_1"), int(os.environ.get("BROKER_1_PORT", "1883"))),
     (os.environ.get("BROKER_2_HOST", "broker_2"), int(os.environ.get("BROKER_2_PORT", "1883"))),
     (os.environ.get("BROKER_3_HOST", "broker_3"), int(os.environ.get("BROKER_3_PORT", "1883"))),
+    (os.environ.get("BROKER_4_HOST", "broker_4"), int(os.environ.get("BROKER_4_PORT", "1883"))),
 ]
 
-# Setor base de cada drone (drone_1..3 → S1, drone_4..6 → S2, drone_7..8 → S3)
-DRONE_HOME = {f"drone_{i}": (1 if i <= 3 else 2 if i <= 6 else 3) for i in range(1, 9)}
+# Setor base de cada drone: a,b → S1 | c,d → S2 | e,f → S3 | g,h → S4
+DRONE_HOME = {
+    "drone_a": 1, "drone_b": 1,
+    "drone_c": 2, "drone_d": 2,
+    "drone_e": 3, "drone_f": 3,
+    "drone_g": 4, "drone_h": 4,
+}
 
 # ── Estado global (atualizado pelas threads MQTT, lido pela thread de desenho) ─
 
@@ -48,6 +55,7 @@ _state = {
         1: {"online": False, "sensors": {}},
         2: {"online": False, "sensors": {}},
         3: {"online": False, "sensors": {}},
+        4: {"online": False, "sensors": {}},
     },
     "events": deque(maxlen=10),   # ocorrências e despachos recentes
 }
@@ -301,8 +309,8 @@ def _draw(stdscr):
         # ── Setores ────────────────────────────────────────────────────────
         put(r, 0, " SETORES", BOLD)
         r += 1
-        sensor_labels = {1: "radar + boia", 2: "radar + naval", 3: "boia + naval"}
-        for sn in (1, 2, 3):
+        sensor_labels = {1: "radar + boia", 2: "radar + boia", 3: "radar + boia", 4: "radar + boia"}
+        for sn in (1, 2, 3, 4):
             ok    = sectors[sn]["online"]
             mark  = "*" if ok else "o"
             color = GREEN if ok else RED
@@ -317,7 +325,7 @@ def _draw(stdscr):
         put(r, 0, " DRONES (8)", BOLD)
         r += 1
         col_w   = w // 2
-        drone_ids = [f"drone_{i}" for i in range(1, 9)]
+        drone_ids = [f"drone_{c}" for c in "abcdefgh"]
         for i in range(0, len(drone_ids), 2):
             for col, did in enumerate(drone_ids[i:i+2]):
                 info = drones.get(did, {})
@@ -368,7 +376,8 @@ def _draw(stdscr):
         put(r, 0, " SENSORES (ultima leitura)", BOLD)
         r += 1
         sensor_order = [(1, "radar"), (1, "buoy"), (2, "radar"),
-                        (2, "naval"), (3, "buoy"),  (3, "naval")]
+                        (2, "buoy"),  (3, "radar"), (3, "buoy"),
+                        (4, "radar"), (4, "buoy")]
         for sn, stype in sensor_order:
             sd = sectors[sn]["sensors"].get(stype)
             if not sd:
@@ -379,15 +388,10 @@ def _draw(stdscr):
                 line = (f"  radar_s{sn}: {sd.get('vessel_count','?')} emb."
                         f"  {sd.get('avg_speed_kn','?')}kn"
                         f"  {sd.get('bearing_deg','?')}deg")
-            elif stype == "buoy":
+            else:
                 line = (f"  buoy_s{sn}:  ondas={sd.get('wave_height_m','?')}m"
                         f"  corrente={sd.get('current_kn','?')}kn"
                         f"  temp={sd.get('water_temp_c','?')}C")
-            else:
-                mag  = "ALERTA" if sd.get("magnetic_anomaly") else "OK"
-                line = (f"  naval_s{sn}: {sd.get('acoustic_db','?')}dB"
-                        f"  contatos={sd.get('surface_contacts','?')}"
-                        f"  mag={mag}")
             if anomaly:
                 line += f"  ! {sd.get('alert', '')}"
             put(r, 0, line[:w - 1], color)
