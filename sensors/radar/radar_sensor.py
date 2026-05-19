@@ -97,9 +97,9 @@ def run():
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     log.info(f"Radar costeiro iniciado | tópico: {TOPIC}")
 
-    # ── Handshake TCP inicial ────────────────────────────────────────────────
-    # Garante que o broker está disponível antes de começar a publicar.
-    # Tenta indefinidamente com intervalo de 5s até conseguir.
+    #Handshake TCP inicial 
+    #Garante que o broker está disponível antes de começar a publicar.
+    #Tenta indefinidamente com intervalo de 5s até conseguir.
     while True:
         try:
             tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -120,9 +120,9 @@ def run():
                 pass
             time.sleep(5)
 
-    # ── Loop de publicação UDP ────────────────────────────────────────────────
-    # Fire-and-forget: se o broker cair, os pacotes são perdidos (aceitável).
-    # Quando o broker voltar, os próximos datagramas chegam normalmente.
+    #Loop de publicação UDP 
+    #Fire-and-forget: se o broker cair, os pacotes são perdidos (aceitável).
+    #Quando o broker voltar, os próximos datagramas chegam normalmente.
     while True:
         data   = sensor.read()
         packet = build_publish(TOPIC, json.dumps(data).encode())
