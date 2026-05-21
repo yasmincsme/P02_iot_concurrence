@@ -1,12 +1,9 @@
-# =============================================================================
-# Sistema de Monitoramento do Estreito Marítimo
-# =============================================================================
 # Arquitetura:
 #   - 4 Brokers MQTT independentes (um por setor) — sem ponto único de falha
 #   - 4 Gerenciadores de Setor com algoritmo de Ricart-Agrawala
 #   - 8 Drones distribuídos: 2 por setor
 #   - 8 Sensores marítimos autônomos: 2 por setor (radar, boia, naval)
-#   - 1 Monitor TUI (executar com: docker compose run --rm -it monitor)
+#   - 1 Monitor para visualização em tempo real 
 #
 # Distribuição de drones:
 #   S1 → drone_a, drone_b   (broker_1 :1883)
@@ -19,7 +16,6 @@
 #   S2 → radar + boia
 #   S3 → radar + boia
 #   S4 → radar + boia
-# =============================================================================
 
 services:
 
@@ -29,6 +25,7 @@ services:
 
   broker_1:
     build: ./broker
+    image: yasmincsme/iot-estreito-broker:latest
     container_name: broker_setor_1
     ports:
       - "1883:1883/tcp"
@@ -39,6 +36,7 @@ services:
 
   broker_2:
     build: ./broker
+    image: yasmincsme/iot-estreito-broker:latest
     container_name: broker_setor_2
     ports:
       - "1884:1883/tcp"
@@ -49,6 +47,7 @@ services:
 
   broker_3:
     build: ./broker
+    image: yasmincsme/iot-estreito-broker:latest
     container_name: broker_setor_3
     ports:
       - "1885:1883/tcp"
@@ -59,6 +58,7 @@ services:
 
   broker_4:
     build: ./broker
+    image: yasmincsme/iot-estreito-broker:latest
     container_name: broker_setor_4
     ports:
       - "1886:1883/tcp"
@@ -67,16 +67,15 @@ services:
       BROKER_PORT: "1883"
     restart: unless-stopped
 
-  # ===========================================================================
   # GERENCIADORES DE SETOR — Ricart-Agrawala para exclusão mútua distribuída
   #
   # PEERS: endereços RA dos outros 3 setores (TCP :5001)
   # DRONES: mapa completo drone_id:broker_host:broker_port para todos os 8 drones
   # ALL_BROKERS: todos os 4 brokers (para subscrever status de drones)
-  # ===========================================================================
 
   sector_manager_1:
     build: ./sector_manager
+    image: yasmincsme/iot-estreito-sector-manager:latest
     container_name: setor_1_manager
     depends_on: [broker_1, broker_2, broker_3, broker_4]
     environment:
@@ -96,6 +95,7 @@ services:
 
   sector_manager_2:
     build: ./sector_manager
+    image: yasmincsme/iot-estreito-sector-manager:latest
     container_name: setor_2_manager
     depends_on: [broker_1, broker_2, broker_3, broker_4]
     environment:
@@ -115,6 +115,7 @@ services:
 
   sector_manager_3:
     build: ./sector_manager
+    image: yasmincsme/iot-estreito-sector-manager:latest
     container_name: setor_3_manager
     depends_on: [broker_1, broker_2, broker_3, broker_4]
     environment:
@@ -134,6 +135,7 @@ services:
 
   sector_manager_4:
     build: ./sector_manager
+    image: yasmincsme/iot-estreito-sector-manager:latest
     container_name: setor_4_manager
     depends_on: [broker_1, broker_2, broker_3, broker_4]
     environment:
@@ -151,12 +153,11 @@ services:
       OCC_MAX:       "65"
     restart: unless-stopped
 
-  # ===========================================================================
   # DRONES — 2 por setor
-  # ===========================================================================
 
   drone_a:
     build: ./drone
+    image: yasmincsme/iot-estreito-drone:latest
     container_name: drone_a
     depends_on: [broker_1]
     environment:
@@ -168,6 +169,7 @@ services:
 
   drone_b:
     build: ./drone
+    image: yasmincsme/iot-estreito-drone:latest
     container_name: drone_b
     depends_on: [broker_1]
     environment:
@@ -179,6 +181,7 @@ services:
 
   drone_c:
     build: ./drone
+    image: yasmincsme/iot-estreito-drone:latest
     container_name: drone_c
     depends_on: [broker_2]
     environment:
@@ -190,6 +193,7 @@ services:
 
   drone_d:
     build: ./drone
+    image: yasmincsme/iot-estreito-drone:latest
     container_name: drone_d
     depends_on: [broker_2]
     environment:
@@ -201,6 +205,7 @@ services:
 
   drone_e:
     build: ./drone
+    image: yasmincsme/iot-estreito-drone:latest
     container_name: drone_e
     depends_on: [broker_3]
     environment:
@@ -212,6 +217,7 @@ services:
 
   drone_f:
     build: ./drone
+    image: yasmincsme/iot-estreito-drone:latest
     container_name: drone_f
     depends_on: [broker_3]
     environment:
@@ -223,6 +229,7 @@ services:
 
   drone_g:
     build: ./drone
+    image: yasmincsme/iot-estreito-drone:latest
     container_name: drone_g
     depends_on: [broker_4]
     environment:
@@ -234,6 +241,7 @@ services:
 
   drone_h:
     build: ./drone
+    image: yasmincsme/iot-estreito-drone:latest
     container_name: drone_h
     depends_on: [broker_4]
     environment:
@@ -243,12 +251,11 @@ services:
       FAILURE_PROB: "0.08"
     restart: unless-stopped
 
-  # ===========================================================================
   # SENSORES — 2 por setor (radar + boia em todos)
-  # ===========================================================================
 
   radar_1:
     build: ./sensors/radar
+    image: yasmincsme/iot-estreito-radar:latest
     container_name: radar_setor_1
     depends_on: [broker_1]
     environment:
@@ -260,6 +267,7 @@ services:
 
   buoy_1:
     build: ./sensors/buoy
+    image: yasmincsme/iot-estreito-buoy:latest
     container_name: buoy_setor_1
     depends_on: [broker_1]
     environment:
@@ -271,6 +279,7 @@ services:
 
   radar_2:
     build: ./sensors/radar
+    image: yasmincsme/iot-estreito-radar:latest
     container_name: radar_setor_2
     depends_on: [broker_2]
     environment:
@@ -282,6 +291,7 @@ services:
 
   buoy_2:
     build: ./sensors/buoy
+    image: yasmincsme/iot-estreito-buoy:latest
     container_name: buoy_setor_2
     depends_on: [broker_2]
     environment:
@@ -293,6 +303,7 @@ services:
 
   radar_3:
     build: ./sensors/radar
+    image: yasmincsme/iot-estreito-radar:latest
     container_name: radar_setor_3
     depends_on: [broker_3]
     environment:
@@ -304,6 +315,7 @@ services:
 
   buoy_3:
     build: ./sensors/buoy
+    image: yasmincsme/iot-estreito-buoy:latest
     container_name: buoy_setor_3
     depends_on: [broker_3]
     environment:
@@ -315,6 +327,7 @@ services:
 
   radar_4:
     build: ./sensors/radar
+    image: yasmincsme/iot-estreito-radar:latest
     container_name: radar_setor_4
     depends_on: [broker_4]
     environment:
@@ -326,6 +339,7 @@ services:
 
   buoy_4:
     build: ./sensors/buoy
+    image: yasmincsme/iot-estreito-buoy:latest
     container_name: buoy_setor_4
     depends_on: [broker_4]
     environment:
@@ -335,7 +349,6 @@ services:
       INTERVAL:    "6"
     restart: unless-stopped
 
-  # ===========================================================================
   # MONITOR TUI
   #
   # Para visualizar:
@@ -347,10 +360,10 @@ services:
   #   BROKER_3_HOST=localhost BROKER_3_PORT=1885 \
   #   BROKER_4_HOST=localhost BROKER_4_PORT=1886 \
   #   python monitor/monitor.py
-  # ===========================================================================
 
   monitor:
     build: ./monitor
+    image: yasmincsme/iot-estreito-monitor:latest
     container_name: monitor
     depends_on: [broker_1, broker_2, broker_3, broker_4]
     environment:
