@@ -1,0 +1,15 @@
+1. Fazer login e push (na sua máquina local):
+
+docker login -u yasmincsme
+docker push yasmincsme/iot-estreito-broker:latest
+docker push yasmincsme/iot-estreito-sector-manager:latest
+docker push yasmincsme/iot-estreito-drone:latest
+docker push yasmincsme/iot-estreito-radar:latest
+docker push yasmincsme/iot-estreito-buoy:latest
+docker push yasmincsme/iot-estreito-monitor:latest
+
+2. Em cada máquina do lab — descobrir o IP interno:
+
+ip addr show | grep 'inet ' | grep -v '127'
+
+3. Rodar o docker run correspondente — todos os comandos prontos no README em Como Utilizar → Opção B, com os placeholders IP_B1, IP_B2, etc. para você substituir pelos IPs reais.
