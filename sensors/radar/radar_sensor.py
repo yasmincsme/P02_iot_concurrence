@@ -1,17 +1,3 @@
-"""
-radar_sensor.py - Sensor de Radar Costeiro
-
-Gera dados simulados de radar naval de forma autônoma:
-  - Contagem de embarcações na área de cobertura
-  - Velocidade média das embarcações
-  - Direção predominante do tráfego (bearing 0-360°)
-  - Anomalias: pico de tráfego, velocidade incomum
-
-Comunicação:
-  - Handshake inicial: TCP CONNECT → CONNACK (confirma que o broker está vivo)
-  - Envio de dados:    UDP PUBLISH  (fire-and-forget, sem overhead de conexão)
-"""
-
 import socket
 import json
 import time
@@ -54,7 +40,6 @@ def build_connect(client_id):
 
 
 def build_publish(topic, payload):
-    """Monta pacote MQTT PUBLISH QoS 0 — mesmo formato para TCP e UDP."""
     tb  = topic.encode()
     var = bytes([len(tb) >> 8, len(tb) & 0xFF]) + tb + payload
     return bytes([0x30]) + _enc_rem(len(var)) + var
@@ -97,9 +82,6 @@ def run():
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     log.info(f"Radar costeiro iniciado | tópico: {TOPIC}")
 
-    #Handshake TCP inicial 
-    #Garante que o broker está disponível antes de começar a publicar.
-    #Tenta indefinidamente com intervalo de 5s até conseguir.
     while True:
         try:
             tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -120,9 +102,6 @@ def run():
                 pass
             time.sleep(5)
 
-    #Loop de publicação UDP 
-    #Fire-and-forget: se o broker cair, os pacotes são perdidos (aceitável).
-    #Quando o broker voltar, os próximos datagramas chegam normalmente.
     while True:
         data   = sensor.read()
         packet = build_publish(TOPIC, json.dumps(data).encode())

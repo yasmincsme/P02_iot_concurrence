@@ -1,17 +1,3 @@
-"""
-sector_manager.py - Gerenciador de Setor Marítimo
-
-Implementa o algoritmo de Ricart-Agrawala para exclusão mútua distribuída
-na alocação de drones autônomos compartilhados entre setores.
-
-Garantias:
-  1. Prioridade por criticidade DESC → timestamp ASC → sector_id ASC
-  2. Nenhum drone é despachado para mais de uma ocorrência simultaneamente
-  3. Uma única ocorrência recebe no máximo um drone
-  4. Todas as requisições são atendidas (fila distribuída com reenvio)
-  5. Falha de setor não bloqueia os demais (timeout = réplica considerada OK)
-"""
-
 import socket
 import threading
 import json
@@ -21,20 +7,13 @@ import logging
 import os
 import heapq
 
-# ---------------------------------------------------------------------------
-# Configuração via variáveis de ambiente
-# ---------------------------------------------------------------------------
-
 SECTOR_ID   = int(os.environ.get("SECTOR_ID", "1"))
 LOCAL_BROKER = os.environ.get("LOCAL_BROKER", "localhost")
 BROKER_PORT  = int(os.environ.get("BROKER_PORT", "1883"))
 RA_PORT      = int(os.environ.get("RA_PORT", "5001"))
 
-# "host:port,host:port" – endereços RA dos outros setores
-PEERS_ENV = os.environ.get("PEERS", "")
-# "drone_id:broker_host:broker_port,..." – mapa drone → broker onde está registrado
-DRONES_ENV = os.environ.get("DRONES", "drone_1:localhost:1883")
-# "host:port,..." – todos os brokers para subscrever status de drones
+PEERS_ENV       = os.environ.get("PEERS", "")
+DRONES_ENV      = os.environ.get("DRONES", "drone_1:localhost:1883")
 ALL_BROKERS_ENV = os.environ.get("ALL_BROKERS", "localhost:1883")
 
 REPLY_TIMEOUT    = float(os.environ.get("REPLY_TIMEOUT", "6.0"))
@@ -50,10 +29,6 @@ logging.basicConfig(
 )
 log = logging.getLogger(f"setor_{SECTOR_ID}")
 
-# ---------------------------------------------------------------------------
-# Tipos de ocorrência e criticidade (1-4)
-# ---------------------------------------------------------------------------
-
 OCCURRENCE_TYPES = {
     "bloqueio_de_rota":       4,
     "embarcacao_a_deriva":    4,
@@ -65,10 +40,6 @@ OCCURRENCE_TYPES = {
     "inspecao_rotineira":     1,
 }
 
-
-# ---------------------------------------------------------------------------
-# Cliente MQTT mínimo (TCP, QoS 0/1)
-# ---------------------------------------------------------------------------
 
 def _enc_rem(n):
     out = bytearray()
@@ -128,7 +99,7 @@ class MQTTClient:
         self.client_id = client_id
         self._sock     = None
         self._lock     = threading.Lock()
-        self._cbs      = {}   # topic_pattern -> list[callback]
+        self._cbs      = {}
         self._mid      = 0
         self._alive    = False
 
@@ -224,10 +195,6 @@ class MQTTClient:
                 break
 
 
-# ---------------------------------------------------------------------------
-# Relógio de Lamport
-# ---------------------------------------------------------------------------
-
 class LamportClock:
     def __init__(self):
         self._t    = 0
@@ -249,44 +216,23 @@ class LamportClock:
             return self._t
 
 
-# ---------------------------------------------------------------------------
-# Algoritmo de Ricart-Agrawala (exclusão mútua distribuída)
-# ---------------------------------------------------------------------------
-
 class RicartAgrawala:
-    """
-    Exclusão mútua distribuída para recursos compartilhados (drones).
-
-    Prioridade de acesso:
-      1. Maior criticidade primeiro
-      2. Menor timestamp (chegou antes) em caso de empate
-      3. Menor sector_id como desempate final
-
-    Tolerância a falhas:
-      Setores que não respondem dentro de REPLY_TIMEOUT são tratados
-      como se tivessem respondido (assunção de falha).
-    """
 
     def __init__(self, sector_id: int, peer_count: int,
                  clock: LamportClock, send_fn):
         self.sector_id  = sector_id
         self.peer_count = peer_count
         self.clock      = clock
-        self.send_fn    = send_fn   # callable(msg_dict) → broadcast para todos os peers
+        self.send_fn    = send_fn
 
         self._lock       = threading.Lock()
-        self._requesting = {}   # drone_id -> {"ts": int, "crit": int, "occ": str}
-        self._deferred   = {}   # drone_id -> list[sector_id que aguarda reply]
-        self._replies    = {}   # drone_id -> set[sector_id que já responderam]
-        self._events     = {}   # drone_id -> threading.Event
+        self._requesting = {}
+        self._deferred   = {}
+        self._replies    = {}
+        self._events     = {}
 
     def request(self, drone_id: str, criticality: int,
                 occurrence_id: str, timeout: float = None) -> bool:
-        """
-        Tenta adquirir acesso exclusivo ao drone_id.
-        Bloqueia até adquirir ou expirar o timeout (tolerância a falhas).
-        Retorna True quando o recurso é adquirido.
-        """
         ts = self.clock.tick()
 
         with self._lock:
@@ -295,7 +241,6 @@ class RicartAgrawala:
             ev = threading.Event()
             self._events[drone_id]     = ev
 
-        # Broadcast REQUEST para todos os peers
         self.send_fn({
             "type":          "REQUEST",
             "drone_id":      drone_id,
@@ -309,7 +254,6 @@ class RicartAgrawala:
         if self.peer_count == 0:
             return True
 
-        # Aguarda replies de todos os peers (com timeout para falhas)
         deadline = time.time() + (timeout or REPLY_TIMEOUT)
         while True:
             with self._lock:
@@ -330,7 +274,6 @@ class RicartAgrawala:
         return True
 
     def handle_request(self, msg: dict):
-        """Processa REQUEST recebido de outro setor."""
         sender   = msg["sector_id"]
         drone_id = msg["drone_id"]
         req_ts   = msg["timestamp"]
@@ -343,19 +286,13 @@ class RicartAgrawala:
             defer = False
 
             if our:
-                # Comparação de prioridade:
-                # Adiamos nossa resposta apenas se NÓS temos prioridade maior.
-                # Prioridade maior = deve acessar o recurso primeiro.
                 our_ts, our_crit = our["ts"], our["crit"]
 
                 if our_crit > req_crit:
-                    # Nossa criticidade é maior → temos prioridade → adiamos reply
                     defer = True
                 elif our_crit == req_crit and our_ts < req_ts:
-                    # Mesmo criticidade, enviamos antes → temos prioridade
                     defer = True
                 elif our_crit == req_crit and our_ts == req_ts and self.sector_id < sender:
-                    # Desempate por sector_id
                     defer = True
 
             if defer:
@@ -368,13 +305,12 @@ class RicartAgrawala:
                 self._send_reply(drone_id, sender)
 
     def handle_reply(self, msg: dict):
-        """Processa REPLY recebido de outro setor."""
         drone_id    = msg["drone_id"]
         from_sector = msg["from_sector"]
         to_sector   = msg.get("to_sector")
 
         if to_sector is not None and to_sector != self.sector_id:
-            return  # não é para nós
+            return
 
         with self._lock:
             if drone_id in self._replies:
@@ -386,10 +322,6 @@ class RicartAgrawala:
         log.debug(f"RA REPLY de setor {from_sector} para {drone_id}")
 
     def release(self, drone_id: str):
-        """
-        Libera o acesso exclusivo ao drone e envia replies adiados.
-        Também emite mensagem RELEASE para que peers possam limpar estado.
-        """
         with self._lock:
             self._requesting.pop(drone_id, None)
             self._replies.pop(drone_id, None)
@@ -407,7 +339,6 @@ class RicartAgrawala:
         log.info(f"RA RELEASE {drone_id} ({len(deferred)} replies adiados enviados)")
 
     def _send_reply(self, drone_id: str, target_sector: int):
-        """Envia REPLY para target_sector (broadcast; target filtra pelo campo to_sector)."""
         self.send_fn({
             "type":        "REPLY",
             "drone_id":    drone_id,
@@ -416,25 +347,18 @@ class RicartAgrawala:
         })
 
 
-# ---------------------------------------------------------------------------
-# Gerenciador de Setor
-# ---------------------------------------------------------------------------
-
 class SectorManager:
 
     def __init__(self):
         self.sector_id = SECTOR_ID
 
-        # ── Parse peers RA ────────────────────────────────────────────────
-        self.peers = []    # list[(host, port)]
+        self.peers = []
         for p in PEERS_ENV.split(","):
             p = p.strip()
             if p:
                 h, prt = p.rsplit(":", 1)
                 self.peers.append((h, int(prt)))
 
-        # ── Parse mapa drones → broker ────────────────────────────────────
-        # drone_id -> (broker_host, broker_port)
         self.drone_map = {}
         for entry in DRONES_ENV.split(","):
             entry = entry.strip()
@@ -442,35 +366,25 @@ class SectorManager:
                 parts = entry.split(":")
                 self.drone_map[parts[0]] = (parts[1], int(parts[2]))
 
-        # ── Parse lista de todos os brokers ───────────────────────────────
-        self.all_brokers = []   # list[(host, port)]
+        self.all_brokers = []
         for b in ALL_BROKERS_ENV.split(","):
             b = b.strip()
             if b:
                 h, prt = b.rsplit(":", 1)
                 self.all_brokers.append((h, int(prt)))
 
-        # ── Estado dos drones ─────────────────────────────────────────────
-        # "available" | "busy" | "requesting" | "offline"
-        # Inicia como "offline": só muda quando o drone publica seu status via MQTT
-        # (drones publicam com retain=True, então chega logo após subscrever)
         self.drone_status = {d: "offline" for d in self.drone_map}
         self.drone_lock   = threading.Lock()
 
-        # ── Fila de ocorrências ───────────────────────────────────────────
-        # heap: (-criticidade, timestamp, sector_id, counter, occ_dict)
         self.occ_queue   = []
         self.occ_counter = 0
         self.occ_lock    = threading.Lock()
 
-        # ── Missões ativas ────────────────────────────────────────────────
-        self.missions      = {}   # drone_id -> occurrence_id
+        self.missions      = {}
         self.missions_lock = threading.Lock()
 
-        # ── Relógio de Lamport ────────────────────────────────────────────
         self.clock = LamportClock()
 
-        # ── Algoritmo Ricart-Agrawala ─────────────────────────────────────
         self.ra = RicartAgrawala(
             sector_id  = self.sector_id,
             peer_count = len(self.peers),
@@ -478,16 +392,13 @@ class SectorManager:
             send_fn    = self._broadcast_ra,
         )
 
-        # ── Conexões RA (TCP peer-to-peer) ────────────────────────────────
-        self.ra_conns = {}    # (host, port) -> socket
+        self.ra_conns = {}
         self.ra_lock  = threading.Lock()
 
-        # ── Clientes MQTT ─────────────────────────────────────────────────
         self.local_mqtt = MQTTClient(
             LOCAL_BROKER, BROKER_PORT,
             f"setor_{SECTOR_ID}_local"
         )
-        # Um cliente por broker (para publicar dispatch e receber status)
         self.broker_mqtts = {}
         for (h, prt) in self.all_brokers:
             cid = f"setor_{SECTOR_ID}_{h}_{prt}"
@@ -495,18 +406,12 @@ class SectorManager:
 
         self._running = False
 
-    # ==========================================================================
-    # Startup
-    # ==========================================================================
-
     def start(self):
         self._running = True
 
-        # 1. Servidor RA
         threading.Thread(target=self._ra_server, daemon=True).start()
         time.sleep(0.3)
 
-        # 2. Conexões MQTT
         self.local_mqtt.connect()
         for key, client in self.broker_mqtts.items():
             try:
@@ -514,7 +419,6 @@ class SectorManager:
             except Exception as e:
                 log.warning(f"Broker {key} indisponível: {e}")
 
-        # 3. Subscrições
         for client in self.broker_mqtts.values():
             client.subscribe("strait/drones/+/status", self._on_drone_status)
 
@@ -523,14 +427,11 @@ class SectorManager:
             self._on_sensor_data
         )
 
-        # 4. Conectar aos peers RA
         time.sleep(2)
         threading.Thread(target=self._connect_ra_peers, daemon=True).start()
 
-        # 5. Gerador de ocorrências
         threading.Thread(target=self._occurrence_generator, daemon=True).start()
 
-        # 6. Despachante de ocorrências
         threading.Thread(target=self._occurrence_dispatcher, daemon=True).start()
 
         log.info(
@@ -541,10 +442,6 @@ class SectorManager:
 
         while self._running:
             time.sleep(1)
-
-    # ==========================================================================
-    # RA – Servidor TCP
-    # ==========================================================================
 
     def _ra_server(self):
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -564,7 +461,6 @@ class SectorManager:
                 log.warning(f"RA server erro: {e}")
 
     def _handle_ra_conn(self, conn, addr):
-        """Lê mensagens JSON delimitadas por newline de um peer RA."""
         buf = b""
         while self._running:
             try:
@@ -588,7 +484,6 @@ class SectorManager:
             pass
 
     def _connect_ra_peers(self):
-        """Conecta a todos os peers RA com retry."""
         for (host, port) in self.peers:
             for attempt in range(12):
                 try:
@@ -605,7 +500,6 @@ class SectorManager:
                     time.sleep(3)
 
     def _broadcast_ra(self, msg: dict):
-        """Envia mensagem RA para todos os peers conectados."""
         data = (json.dumps(msg) + "\n").encode()
         with self.ra_lock:
             conns = list(self.ra_conns.values())
@@ -616,23 +510,17 @@ class SectorManager:
                 log.warning(f"RA broadcast falhou: {e}")
 
     def _process_ra_msg(self, msg: dict):
-        """Despacha mensagem RA recebida para o handler correto."""
         mtype = msg.get("type")
         if mtype == "REQUEST":
             self.ra.handle_request(msg)
         elif mtype == "REPLY":
             self.ra.handle_reply(msg)
         elif mtype == "RELEASE":
-            pass  # RELEASE é informativo; replies adiados já foram enviados
-
-    # ==========================================================================
-    # Callbacks MQTT
-    # ==========================================================================
+            pass
 
     def _on_drone_status(self, topic: str, payload: bytes):
-        """Atualiza status local de um drone ao receber publicação de status."""
         try:
-            parts    = topic.split("/")   # strait/drones/{drone_id}/status
+            parts    = topic.split("/")
             drone_id = parts[2]
             data     = json.loads(payload)
             status   = data.get("status", "available")
@@ -646,7 +534,6 @@ class SectorManager:
             log.warning(f"Erro ao processar status de drone: {e}")
 
     def _on_sensor_data(self, topic: str, payload: bytes):
-        """Processa dado de sensor; pode disparar ocorrência por anomalia."""
         try:
             data        = json.loads(payload)
             sensor_type = topic.split("/")[-1]
@@ -655,7 +542,6 @@ class SectorManager:
             pass
 
     def _check_sensor_anomaly(self, sensor_type: str, data: dict):
-        """Detecta anomalias nos dados de sensores e gera ocorrências."""
         thresholds = {"radar": 0.04, "buoy": 0.03}
         chance = thresholds.get(sensor_type, 0.02)
 
@@ -667,13 +553,7 @@ class SectorManager:
             occ_type = random.choice(occ_candidates.get(sensor_type, ["inspecao_urgente"]))
             self._enqueue_occurrence(occ_type, f"anomalia em sensor {sensor_type}")
 
-    # ==========================================================================
-    # Gestão de Ocorrências
-    # ==========================================================================
-
     def _occurrence_generator(self):
-        """Gera ocorrências aleatórias periodicamente para simular o cenário."""
-        # Stagger inicial para evitar tempestade de eventos na inicialização
         time.sleep(random.uniform(8, 20))
         while self._running:
             occ_type = random.choice(list(OCCURRENCE_TYPES.keys()))
@@ -686,7 +566,6 @@ class SectorManager:
             time.sleep(wait)
 
     def _enqueue_occurrence(self, occ_type: str, reason: str):
-        """Adiciona ocorrência à fila de prioridade."""
         criticality = OCCURRENCE_TYPES.get(occ_type, 1)
         ts          = self.clock.tick()
 
@@ -701,7 +580,6 @@ class SectorManager:
                 "timestamp":   ts,
                 "reason":      reason,
             }
-            # Min-heap com prioridade invertida: criticidade alta primeiro
             heapq.heappush(
                 self.occ_queue,
                 (-criticality, ts, self.sector_id, self.occ_counter, occ)
@@ -717,7 +595,6 @@ class SectorManager:
         )
 
     def _occurrence_dispatcher(self):
-        """Loop contínuo que retira ocorrências da fila e as trata em threads."""
         while self._running:
             occ = None
             with self.occ_lock:
@@ -734,10 +611,6 @@ class SectorManager:
                 time.sleep(0.5)
 
     def _handle_occurrence(self, occ: dict):
-        """
-        Tenta adquirir um drone via Ricart-Agrawala e despachá-lo.
-        Re-enfileira a ocorrência se não conseguir drone após tentativas.
-        """
         occ_id = occ["id"]
         crit   = occ["criticality"]
         log.info(f"Tratando {occ_id} (tipo={occ['type']}, crit={crit})")
@@ -755,17 +628,14 @@ class SectorManager:
             drone_id = candidate
             log.info(f"{occ_id}: tentando adquirir {drone_id} via Ricart-Agrawala (tentativa {attempt})")
 
-            # Marca otimisticamente como "requesting" para evitar dupla solicitação local
             with self.drone_lock:
                 if self.drone_status.get(drone_id) != "available":
                     drone_id = None
                     continue
                 self.drone_status[drone_id] = "requesting"
 
-            # Executa Ricart-Agrawala
             self.ra.request(drone_id, crit, occ_id)
 
-            # Após RA, verifica se o drone ainda está disponível (pode ter falhado)
             with self.drone_lock:
                 current = self.drone_status.get(drone_id)
                 if current in ("available", "requesting"):
@@ -780,7 +650,6 @@ class SectorManager:
 
         if not drone_id:
             log.error(f"{occ_id}: FALHA ao adquirir drone após {max_attempts} tentativas")
-            # Re-enfileira com criticidade reduzida para não monopolizar a fila
             occ_retry = dict(occ)
             occ_retry["criticality"] = max(1, occ["criticality"] - 1)
             time.sleep(10)
@@ -790,17 +659,11 @@ class SectorManager:
         self._dispatch_drone(drone_id, occ)
 
     def _pick_available_drone(self):
-        """Retorna um drone disponível, priorizando os menos utilizados."""
         with self.drone_lock:
             available = [d for d, s in self.drone_status.items() if s == "available"]
         return random.choice(available) if available else None
 
-    # ==========================================================================
-    # Despacho de Drone
-    # ==========================================================================
-
     def _dispatch_drone(self, drone_id: str, occ: dict):
-        """Despacha drone para a ocorrência e gerencia o ciclo da missão."""
         occ_id = occ["id"]
 
         with self.missions_lock:
@@ -817,7 +680,6 @@ class SectorManager:
 
         log.info(f"DESPACHANDO {drone_id} → {occ_id} (tipo={occ['type']})")
 
-        # Publica o despacho no broker ao qual o drone está conectado
         broker_addr = self.drone_map.get(drone_id)
         if broker_addr and broker_addr in self.broker_mqtts:
             self.broker_mqtts[broker_addr].publish(
@@ -825,19 +687,17 @@ class SectorManager:
                 json.dumps(dispatch_msg)
             )
         else:
-            # Fallback: publica no broker local
             self.local_mqtt.publish(
                 f"strait/drones/{drone_id}/dispatch",
                 json.dumps(dispatch_msg)
             )
 
-        # Aguarda conclusão da missão com verificação periódica de saúde do drone
         mission_duration = random.uniform(MISSION_MIN, MISSION_MAX)
         log.info(f"Missão {occ_id}: duração estimada {mission_duration:.0f}s")
 
-        elapsed       = 0
+        elapsed        = 0
         check_interval = 5
-        reallocated   = False
+        reallocated    = False
 
         while elapsed < mission_duration:
             time.sleep(check_interval)
@@ -851,7 +711,6 @@ class SectorManager:
                 with self.missions_lock:
                     self.missions.pop(drone_id, None)
                 self.ra.release(drone_id)
-                # Re-enfileira a ocorrência para nova tentativa
                 self._enqueue_occurrence(occ["type"], f"realocação após falha de {drone_id}")
                 reallocated = True
                 return
@@ -868,7 +727,6 @@ class SectorManager:
 
             self.ra.release(drone_id)
 
-            # Notifica o drone para retornar à base
             recall_msg = {
                 "drone_id":  drone_id,
                 "command":   "recall",
@@ -880,10 +738,6 @@ class SectorManager:
                     json.dumps(recall_msg)
                 )
 
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 
 def main():
     manager = SectorManager()
