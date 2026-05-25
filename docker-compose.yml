@@ -3,13 +3,13 @@
 #   - 4 Gerenciadores de Setor com algoritmo de Ricart-Agrawala
 #   - 8 Drones distribuídos: 2 por setor
 #   - 8 Sensores marítimos autônomos: 2 por setor (radar, boia, naval)
-#   - 1 Monitor para visualização em tempo real 
+#   - 1 Monitor para visualização em tempo real
 #
 # Distribuição de drones:
-#   S1 → drone_a, drone_b   (broker_1 :1883)
-#   S2 → drone_c, drone_d   (broker_2 :1884)
-#   S3 → drone_e, drone_f   (broker_3 :1885)
-#   S4 → drone_g, drone_h   (broker_4 :1886)
+#   S1 → drone_a, drone_b   (broker_1 :3001)
+#   S2 → drone_c, drone_d   (broker_2 :3002)
+#   S3 → drone_e, drone_f   (broker_3 :3003)
+#   S4 → drone_g, drone_h   (broker_4 :3004)
 #
 # Sensores por setor (todos radar + boia):
 #   S1 → radar + boia
@@ -28,10 +28,10 @@ services:
     image: yasmincsme/iot-estreito-broker:latest
     container_name: broker_setor_1
     ports:
-      - "1883:1883/tcp"
-      - "1883:1883/udp"
+      - "3001:3001/tcp"
+      - "3001:3001/udp"
     environment:
-      BROKER_PORT: "1883"
+      BROKER_PORT: "3001"
     restart: unless-stopped
 
   broker_2:
@@ -39,10 +39,10 @@ services:
     image: yasmincsme/iot-estreito-broker:latest
     container_name: broker_setor_2
     ports:
-      - "1884:1883/tcp"
-      - "1884:1883/udp"
+      - "3002:3002/tcp"
+      - "3002:3002/udp"
     environment:
-      BROKER_PORT: "1883"
+      BROKER_PORT: "3002"
     restart: unless-stopped
 
   broker_3:
@@ -50,10 +50,10 @@ services:
     image: yasmincsme/iot-estreito-broker:latest
     container_name: broker_setor_3
     ports:
-      - "1885:1883/tcp"
-      - "1885:1883/udp"
+      - "3003:3003/tcp"
+      - "3003:3003/udp"
     environment:
-      BROKER_PORT: "1883"
+      BROKER_PORT: "3003"
     restart: unless-stopped
 
   broker_4:
@@ -61,10 +61,10 @@ services:
     image: yasmincsme/iot-estreito-broker:latest
     container_name: broker_setor_4
     ports:
-      - "1886:1883/tcp"
-      - "1886:1883/udp"
+      - "3004:3004/tcp"
+      - "3004:3004/udp"
     environment:
-      BROKER_PORT: "1883"
+      BROKER_PORT: "3004"
     restart: unless-stopped
 
   # GERENCIADORES DE SETOR — Ricart-Agrawala para exclusão mútua distribuída
@@ -81,11 +81,11 @@ services:
     environment:
       SECTOR_ID:     "1"
       LOCAL_BROKER:  "broker_1"
-      BROKER_PORT:   "1883"
+      BROKER_PORT:   "3001"
       RA_PORT:       "5001"
       PEERS:         "sector_manager_2:5001,sector_manager_3:5001,sector_manager_4:5001"
-      DRONES:        "drone_a:broker_1:1883,drone_b:broker_1:1883,drone_c:broker_2:1883,drone_d:broker_2:1883,drone_e:broker_3:1883,drone_f:broker_3:1883,drone_g:broker_4:1883,drone_h:broker_4:1883"
-      ALL_BROKERS:   "broker_1:1883,broker_2:1883,broker_3:1883,broker_4:1883"
+      DRONES:        "drone_a:broker_1:3001,drone_b:broker_1:3001,drone_c:broker_2:3002,drone_d:broker_2:3002,drone_e:broker_3:3003,drone_f:broker_3:3003,drone_g:broker_4:3004,drone_h:broker_4:3004"
+      ALL_BROKERS:   "broker_1:3001,broker_2:3002,broker_3:3003,broker_4:3004"
       REPLY_TIMEOUT: "6.0"
       MISSION_MIN:   "20"
       MISSION_MAX:   "60"
@@ -101,11 +101,11 @@ services:
     environment:
       SECTOR_ID:     "2"
       LOCAL_BROKER:  "broker_2"
-      BROKER_PORT:   "1883"
+      BROKER_PORT:   "3002"
       RA_PORT:       "5001"
       PEERS:         "sector_manager_1:5001,sector_manager_3:5001,sector_manager_4:5001"
-      DRONES:        "drone_a:broker_1:1883,drone_b:broker_1:1883,drone_c:broker_2:1883,drone_d:broker_2:1883,drone_e:broker_3:1883,drone_f:broker_3:1883,drone_g:broker_4:1883,drone_h:broker_4:1883"
-      ALL_BROKERS:   "broker_1:1883,broker_2:1883,broker_3:1883,broker_4:1883"
+      DRONES:        "drone_a:broker_1:3001,drone_b:broker_1:3001,drone_c:broker_2:3002,drone_d:broker_2:3002,drone_e:broker_3:3003,drone_f:broker_3:3003,drone_g:broker_4:3004,drone_h:broker_4:3004"
+      ALL_BROKERS:   "broker_1:3001,broker_2:3002,broker_3:3003,broker_4:3004"
       REPLY_TIMEOUT: "6.0"
       MISSION_MIN:   "20"
       MISSION_MAX:   "60"
@@ -121,11 +121,11 @@ services:
     environment:
       SECTOR_ID:     "3"
       LOCAL_BROKER:  "broker_3"
-      BROKER_PORT:   "1883"
+      BROKER_PORT:   "3003"
       RA_PORT:       "5001"
       PEERS:         "sector_manager_1:5001,sector_manager_2:5001,sector_manager_4:5001"
-      DRONES:        "drone_a:broker_1:1883,drone_b:broker_1:1883,drone_c:broker_2:1883,drone_d:broker_2:1883,drone_e:broker_3:1883,drone_f:broker_3:1883,drone_g:broker_4:1883,drone_h:broker_4:1883"
-      ALL_BROKERS:   "broker_1:1883,broker_2:1883,broker_3:1883,broker_4:1883"
+      DRONES:        "drone_a:broker_1:3001,drone_b:broker_1:3001,drone_c:broker_2:3002,drone_d:broker_2:3002,drone_e:broker_3:3003,drone_f:broker_3:3003,drone_g:broker_4:3004,drone_h:broker_4:3004"
+      ALL_BROKERS:   "broker_1:3001,broker_2:3002,broker_3:3003,broker_4:3004"
       REPLY_TIMEOUT: "6.0"
       MISSION_MIN:   "20"
       MISSION_MAX:   "60"
@@ -141,11 +141,11 @@ services:
     environment:
       SECTOR_ID:     "4"
       LOCAL_BROKER:  "broker_4"
-      BROKER_PORT:   "1883"
+      BROKER_PORT:   "3004"
       RA_PORT:       "5001"
       PEERS:         "sector_manager_1:5001,sector_manager_2:5001,sector_manager_3:5001"
-      DRONES:        "drone_a:broker_1:1883,drone_b:broker_1:1883,drone_c:broker_2:1883,drone_d:broker_2:1883,drone_e:broker_3:1883,drone_f:broker_3:1883,drone_g:broker_4:1883,drone_h:broker_4:1883"
-      ALL_BROKERS:   "broker_1:1883,broker_2:1883,broker_3:1883,broker_4:1883"
+      DRONES:        "drone_a:broker_1:3001,drone_b:broker_1:3001,drone_c:broker_2:3002,drone_d:broker_2:3002,drone_e:broker_3:3003,drone_f:broker_3:3003,drone_g:broker_4:3004,drone_h:broker_4:3004"
+      ALL_BROKERS:   "broker_1:3001,broker_2:3002,broker_3:3003,broker_4:3004"
       REPLY_TIMEOUT: "6.0"
       MISSION_MIN:   "20"
       MISSION_MAX:   "60"
@@ -163,7 +163,7 @@ services:
     environment:
       DRONE_ID:     "drone_a"
       BROKER_HOST:  "broker_1"
-      BROKER_PORT:  "1883"
+      BROKER_PORT:  "3001"
       FAILURE_PROB: "0.08"
     restart: unless-stopped
 
@@ -175,7 +175,7 @@ services:
     environment:
       DRONE_ID:     "drone_b"
       BROKER_HOST:  "broker_1"
-      BROKER_PORT:  "1883"
+      BROKER_PORT:  "3001"
       FAILURE_PROB: "0.08"
     restart: unless-stopped
 
@@ -187,7 +187,7 @@ services:
     environment:
       DRONE_ID:     "drone_c"
       BROKER_HOST:  "broker_2"
-      BROKER_PORT:  "1883"
+      BROKER_PORT:  "3002"
       FAILURE_PROB: "0.08"
     restart: unless-stopped
 
@@ -199,7 +199,7 @@ services:
     environment:
       DRONE_ID:     "drone_d"
       BROKER_HOST:  "broker_2"
-      BROKER_PORT:  "1883"
+      BROKER_PORT:  "3002"
       FAILURE_PROB: "0.08"
     restart: unless-stopped
 
@@ -211,7 +211,7 @@ services:
     environment:
       DRONE_ID:     "drone_e"
       BROKER_HOST:  "broker_3"
-      BROKER_PORT:  "1883"
+      BROKER_PORT:  "3003"
       FAILURE_PROB: "0.08"
     restart: unless-stopped
 
@@ -223,7 +223,7 @@ services:
     environment:
       DRONE_ID:     "drone_f"
       BROKER_HOST:  "broker_3"
-      BROKER_PORT:  "1883"
+      BROKER_PORT:  "3003"
       FAILURE_PROB: "0.08"
     restart: unless-stopped
 
@@ -235,7 +235,7 @@ services:
     environment:
       DRONE_ID:     "drone_g"
       BROKER_HOST:  "broker_4"
-      BROKER_PORT:  "1883"
+      BROKER_PORT:  "3004"
       FAILURE_PROB: "0.08"
     restart: unless-stopped
 
@@ -247,7 +247,7 @@ services:
     environment:
       DRONE_ID:     "drone_h"
       BROKER_HOST:  "broker_4"
-      BROKER_PORT:  "1883"
+      BROKER_PORT:  "3004"
       FAILURE_PROB: "0.08"
     restart: unless-stopped
 
@@ -260,7 +260,7 @@ services:
     depends_on: [broker_1]
     environment:
       BROKER_HOST: "broker_1"
-      BROKER_PORT: "1883"
+      BROKER_PORT: "3001"
       SECTOR_ID:   "1"
       INTERVAL:    "4"
     restart: unless-stopped
@@ -272,7 +272,7 @@ services:
     depends_on: [broker_1]
     environment:
       BROKER_HOST: "broker_1"
-      BROKER_PORT: "1883"
+      BROKER_PORT: "3001"
       SECTOR_ID:   "1"
       INTERVAL:    "6"
     restart: unless-stopped
@@ -284,7 +284,7 @@ services:
     depends_on: [broker_2]
     environment:
       BROKER_HOST: "broker_2"
-      BROKER_PORT: "1883"
+      BROKER_PORT: "3002"
       SECTOR_ID:   "2"
       INTERVAL:    "4"
     restart: unless-stopped
@@ -296,7 +296,7 @@ services:
     depends_on: [broker_2]
     environment:
       BROKER_HOST: "broker_2"
-      BROKER_PORT: "1883"
+      BROKER_PORT: "3002"
       SECTOR_ID:   "2"
       INTERVAL:    "6"
     restart: unless-stopped
@@ -308,7 +308,7 @@ services:
     depends_on: [broker_3]
     environment:
       BROKER_HOST: "broker_3"
-      BROKER_PORT: "1883"
+      BROKER_PORT: "3003"
       SECTOR_ID:   "3"
       INTERVAL:    "4"
     restart: unless-stopped
@@ -320,7 +320,7 @@ services:
     depends_on: [broker_3]
     environment:
       BROKER_HOST: "broker_3"
-      BROKER_PORT: "1883"
+      BROKER_PORT: "3003"
       SECTOR_ID:   "3"
       INTERVAL:    "6"
     restart: unless-stopped
@@ -332,7 +332,7 @@ services:
     depends_on: [broker_4]
     environment:
       BROKER_HOST: "broker_4"
-      BROKER_PORT: "1883"
+      BROKER_PORT: "3004"
       SECTOR_ID:   "4"
       INTERVAL:    "4"
     restart: unless-stopped
@@ -344,7 +344,7 @@ services:
     depends_on: [broker_4]
     environment:
       BROKER_HOST: "broker_4"
-      BROKER_PORT: "1883"
+      BROKER_PORT: "3004"
       SECTOR_ID:   "4"
       INTERVAL:    "6"
     restart: unless-stopped
@@ -355,10 +355,10 @@ services:
   #   docker compose run --rm -it monitor
   #
   # Ou localmente:
-  #   BROKER_1_HOST=localhost BROKER_1_PORT=1883 \
-  #   BROKER_2_HOST=localhost BROKER_2_PORT=1884 \
-  #   BROKER_3_HOST=localhost BROKER_3_PORT=1885 \
-  #   BROKER_4_HOST=localhost BROKER_4_PORT=1886 \
+  #   BROKER_1_HOST=localhost BROKER_1_PORT=3001 \
+  #   BROKER_2_HOST=localhost BROKER_2_PORT=3002 \
+  #   BROKER_3_HOST=localhost BROKER_3_PORT=3003 \
+  #   BROKER_4_HOST=localhost BROKER_4_PORT=3004 \
   #   python monitor/monitor.py
 
   monitor:
@@ -368,13 +368,13 @@ services:
     depends_on: [broker_1, broker_2, broker_3, broker_4]
     environment:
       BROKER_1_HOST: "broker_1"
-      BROKER_1_PORT: "1883"
+      BROKER_1_PORT: "3001"
       BROKER_2_HOST: "broker_2"
-      BROKER_2_PORT: "1883"
+      BROKER_2_PORT: "3002"
       BROKER_3_HOST: "broker_3"
-      BROKER_3_PORT: "1883"
+      BROKER_3_PORT: "3003"
       BROKER_4_HOST: "broker_4"
-      BROKER_4_PORT: "1883"
+      BROKER_4_PORT: "3004"
       TERM:          "xterm-256color"
     stdin_open: true
     tty: true
