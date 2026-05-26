@@ -1,15 +1,12 @@
-1. Fazer login e push (na sua máquina local):
+docker compose up broker_1 sector_manager_1 drone_a drone_b radar_1 buoy_1
 
-docker login -u yasmincsme
-docker push yasmincsme/iot-estreito-broker:latest
-docker push yasmincsme/iot-estreito-sector-manager:latest
-docker push yasmincsme/iot-estreito-drone:latest
-docker push yasmincsme/iot-estreito-radar:latest
-docker push yasmincsme/iot-estreito-buoy:latest
-docker push yasmincsme/iot-estreito-monitor:latest
+docker compose up broker_2 broker_3 sector_manager_2 sector_manager_3 drone_c drone_d drone_e drone_f radar_2 buoy_2 radar_3 buoy_3 radar_4 buoy_4
 
-2. Em cada máquina do lab — descobrir o IP interno:
+docker compose run --rm -it monitor
 
-ip addr show | grep 'inet ' | grep -v '127'
+docker compose up broker_4
 
-3. Rodar o docker run correspondente — todos os comandos prontos no README em Como Utilizar → Opção B, com os placeholders IP_B1, IP_B2, etc. para você substituir pelos IPs reais.
+docker compose up sector_manager_4
+
+docker compose up drone_g drone_h
+
