@@ -1,21 +1,17 @@
 # Execução distribuída — rodar apenas os serviços indicados em cada máquina:
 #
 #   ladica02  (172.16.201.2):  docker compose up broker_1 sector_manager_1 drone_a drone_b radar_1 buoy_1
-#   ladica03  (172.16.201.3):  docker compose up broker_2 sector_manager_2 drone_c drone_d radar_2 buoy_2
-#   ladica010 (172.16.201.10): docker compose up broker_3 sector_manager_3 drone_e radar_3 buoy_3
-#   ladica011 (172.16.201.11): docker compose up drone_f
-#   ladica012 (172.16.201.12): docker compose up broker_4 sector_manager_4 drone_g radar_4 buoy_4
-#   ladica016 (172.16.201.16): docker compose up drone_h
+#   ladica03  (172.16.201.3):  docker compose up broker_2 broker_3 sector_manager_2 sector_manager_3 drone_c drone_d drone_e drone_f radar_2 buoy_2 radar_3 buoy_3 radar_4 buoy_4
+#   ladica010 (172.16.201.10): docker compose run --rm -it monitor
+#   ladica011 (172.16.201.11): docker compose up broker_4
+#   ladica012 (172.16.201.12): docker compose up sector_manager_4
+#   ladica016 (172.16.201.16): docker compose up drone_g drone_h
 #
-# Obs: drone_f (setor 3) roda em ladica011 mas conecta ao broker_3 em ladica010
-#      drone_h (setor 4) roda em ladica016 mas conecta ao broker_4 em ladica012
-#
-# Portas expostas:
-#   3001 — broker_1 (ladica02)
-#   3002 — broker_2 (ladica03)
-#   3003 — broker_3 (ladica010)
-#   3004 — broker_4 (ladica012)
-#   5001 — RA TCP de cada sector_manager
+# Portas RA dos gerenciadores (evita conflito em ladica03):
+#   sector_manager_1 → 5001 (ladica02)
+#   sector_manager_2 → 5002 (ladica03)
+#   sector_manager_3 → 5003 (ladica03)
+#   sector_manager_4 → 5001 (ladica012)
 
 services:
 
@@ -23,6 +19,7 @@ services:
   # BROKERS
   # ===========================================================================
 
+  # ladica02
   broker_1:
     image: yasmincsme/iot-estreito-broker:latest
     container_name: broker_setor_1
@@ -33,6 +30,7 @@ services:
       BROKER_PORT: "3001"
     restart: unless-stopped
 
+  # ladica03
   broker_2:
     image: yasmincsme/iot-estreito-broker:latest
     container_name: broker_setor_2
@@ -43,6 +41,7 @@ services:
       BROKER_PORT: "3002"
     restart: unless-stopped
 
+  # ladica03
   broker_3:
     image: yasmincsme/iot-estreito-broker:latest
     container_name: broker_setor_3
@@ -53,6 +52,7 @@ services:
       BROKER_PORT: "3003"
     restart: unless-stopped
 
+  # ladica011
   broker_4:
     image: yasmincsme/iot-estreito-broker:latest
     container_name: broker_setor_4
@@ -67,6 +67,7 @@ services:
   # GERENCIADORES DE SETOR
   # ===========================================================================
 
+  # ladica02 — RA porta 5001
   sector_manager_1:
     image: yasmincsme/iot-estreito-sector-manager:latest
     container_name: setor_1_manager
@@ -77,9 +78,9 @@ services:
       LOCAL_BROKER:  "172.16.201.2"
       BROKER_PORT:   "3001"
       RA_PORT:       "5001"
-      PEERS:         "172.16.201.3:5001,172.16.201.10:5001,172.16.201.12:5001"
-      DRONES:        "drone_a:172.16.201.2:3001,drone_b:172.16.201.2:3001,drone_c:172.16.201.3:3002,drone_d:172.16.201.3:3002,drone_e:172.16.201.10:3003,drone_f:172.16.201.10:3003,drone_g:172.16.201.12:3004,drone_h:172.16.201.12:3004"
-      ALL_BROKERS:   "172.16.201.2:3001,172.16.201.3:3002,172.16.201.10:3003,172.16.201.12:3004"
+      PEERS:         "172.16.201.3:5002,172.16.201.3:5003,172.16.201.12:5001"
+      DRONES:        "drone_a:172.16.201.2:3001,drone_b:172.16.201.2:3001,drone_c:172.16.201.3:3002,drone_d:172.16.201.3:3002,drone_e:172.16.201.3:3003,drone_f:172.16.201.3:3003,drone_g:172.16.201.11:3004,drone_h:172.16.201.11:3004"
+      ALL_BROKERS:   "172.16.201.2:3001,172.16.201.3:3002,172.16.201.3:3003,172.16.201.11:3004"
       REPLY_TIMEOUT: "6.0"
       MISSION_MIN:   "20"
       MISSION_MAX:   "60"
@@ -87,19 +88,20 @@ services:
       OCC_MAX:       "60"
     restart: unless-stopped
 
+  # ladica03 — RA porta 5002
   sector_manager_2:
     image: yasmincsme/iot-estreito-sector-manager:latest
     container_name: setor_2_manager
     ports:
-      - "5001:5001"
+      - "5002:5002"
     environment:
       SECTOR_ID:     "2"
       LOCAL_BROKER:  "172.16.201.3"
       BROKER_PORT:   "3002"
-      RA_PORT:       "5001"
-      PEERS:         "172.16.201.2:5001,172.16.201.10:5001,172.16.201.12:5001"
-      DRONES:        "drone_a:172.16.201.2:3001,drone_b:172.16.201.2:3001,drone_c:172.16.201.3:3002,drone_d:172.16.201.3:3002,drone_e:172.16.201.10:3003,drone_f:172.16.201.10:3003,drone_g:172.16.201.12:3004,drone_h:172.16.201.12:3004"
-      ALL_BROKERS:   "172.16.201.2:3001,172.16.201.3:3002,172.16.201.10:3003,172.16.201.12:3004"
+      RA_PORT:       "5002"
+      PEERS:         "172.16.201.2:5001,172.16.201.3:5003,172.16.201.12:5001"
+      DRONES:        "drone_a:172.16.201.2:3001,drone_b:172.16.201.2:3001,drone_c:172.16.201.3:3002,drone_d:172.16.201.3:3002,drone_e:172.16.201.3:3003,drone_f:172.16.201.3:3003,drone_g:172.16.201.11:3004,drone_h:172.16.201.11:3004"
+      ALL_BROKERS:   "172.16.201.2:3001,172.16.201.3:3002,172.16.201.3:3003,172.16.201.11:3004"
       REPLY_TIMEOUT: "6.0"
       MISSION_MIN:   "20"
       MISSION_MAX:   "60"
@@ -107,19 +109,20 @@ services:
       OCC_MAX:       "70"
     restart: unless-stopped
 
+  # ladica03 — RA porta 5003
   sector_manager_3:
     image: yasmincsme/iot-estreito-sector-manager:latest
     container_name: setor_3_manager
     ports:
-      - "5001:5001"
+      - "5003:5003"
     environment:
       SECTOR_ID:     "3"
-      LOCAL_BROKER:  "172.16.201.10"
+      LOCAL_BROKER:  "172.16.201.3"
       BROKER_PORT:   "3003"
-      RA_PORT:       "5001"
-      PEERS:         "172.16.201.2:5001,172.16.201.3:5001,172.16.201.12:5001"
-      DRONES:        "drone_a:172.16.201.2:3001,drone_b:172.16.201.2:3001,drone_c:172.16.201.3:3002,drone_d:172.16.201.3:3002,drone_e:172.16.201.10:3003,drone_f:172.16.201.10:3003,drone_g:172.16.201.12:3004,drone_h:172.16.201.12:3004"
-      ALL_BROKERS:   "172.16.201.2:3001,172.16.201.3:3002,172.16.201.10:3003,172.16.201.12:3004"
+      RA_PORT:       "5003"
+      PEERS:         "172.16.201.2:5001,172.16.201.3:5002,172.16.201.12:5001"
+      DRONES:        "drone_a:172.16.201.2:3001,drone_b:172.16.201.2:3001,drone_c:172.16.201.3:3002,drone_d:172.16.201.3:3002,drone_e:172.16.201.3:3003,drone_f:172.16.201.3:3003,drone_g:172.16.201.11:3004,drone_h:172.16.201.11:3004"
+      ALL_BROKERS:   "172.16.201.2:3001,172.16.201.3:3002,172.16.201.3:3003,172.16.201.11:3004"
       REPLY_TIMEOUT: "6.0"
       MISSION_MIN:   "20"
       MISSION_MAX:   "60"
@@ -127,6 +130,7 @@ services:
       OCC_MAX:       "55"
     restart: unless-stopped
 
+  # ladica012 — RA porta 5001
   sector_manager_4:
     image: yasmincsme/iot-estreito-sector-manager:latest
     container_name: setor_4_manager
@@ -134,12 +138,12 @@ services:
       - "5001:5001"
     environment:
       SECTOR_ID:     "4"
-      LOCAL_BROKER:  "172.16.201.12"
+      LOCAL_BROKER:  "172.16.201.11"
       BROKER_PORT:   "3004"
       RA_PORT:       "5001"
-      PEERS:         "172.16.201.2:5001,172.16.201.3:5001,172.16.201.10:5001"
-      DRONES:        "drone_a:172.16.201.2:3001,drone_b:172.16.201.2:3001,drone_c:172.16.201.3:3002,drone_d:172.16.201.3:3002,drone_e:172.16.201.10:3003,drone_f:172.16.201.10:3003,drone_g:172.16.201.12:3004,drone_h:172.16.201.12:3004"
-      ALL_BROKERS:   "172.16.201.2:3001,172.16.201.3:3002,172.16.201.10:3003,172.16.201.12:3004"
+      PEERS:         "172.16.201.2:5001,172.16.201.3:5002,172.16.201.3:5003"
+      DRONES:        "drone_a:172.16.201.2:3001,drone_b:172.16.201.2:3001,drone_c:172.16.201.3:3002,drone_d:172.16.201.3:3002,drone_e:172.16.201.3:3003,drone_f:172.16.201.3:3003,drone_g:172.16.201.11:3004,drone_h:172.16.201.11:3004"
+      ALL_BROKERS:   "172.16.201.2:3001,172.16.201.3:3002,172.16.201.3:3003,172.16.201.11:3004"
       REPLY_TIMEOUT: "6.0"
       MISSION_MIN:   "20"
       MISSION_MAX:   "60"
@@ -151,6 +155,7 @@ services:
   # DRONES
   # ===========================================================================
 
+  # ladica02
   drone_a:
     image: yasmincsme/iot-estreito-drone:latest
     container_name: drone_a
@@ -161,6 +166,7 @@ services:
       FAILURE_PROB: "0.08"
     restart: unless-stopped
 
+  # ladica02
   drone_b:
     image: yasmincsme/iot-estreito-drone:latest
     container_name: drone_b
@@ -171,6 +177,7 @@ services:
       FAILURE_PROB: "0.08"
     restart: unless-stopped
 
+  # ladica03
   drone_c:
     image: yasmincsme/iot-estreito-drone:latest
     container_name: drone_c
@@ -181,6 +188,7 @@ services:
       FAILURE_PROB: "0.08"
     restart: unless-stopped
 
+  # ladica03
   drone_d:
     image: yasmincsme/iot-estreito-drone:latest
     container_name: drone_d
@@ -191,44 +199,46 @@ services:
       FAILURE_PROB: "0.08"
     restart: unless-stopped
 
+  # ladica03
   drone_e:
     image: yasmincsme/iot-estreito-drone:latest
     container_name: drone_e
     environment:
       DRONE_ID:     "drone_e"
-      BROKER_HOST:  "172.16.201.10"
+      BROKER_HOST:  "172.16.201.3"
       BROKER_PORT:  "3003"
       FAILURE_PROB: "0.08"
     restart: unless-stopped
 
-  # drone_f roda em ladica011 mas conecta ao broker_3 em ladica010
+  # ladica03
   drone_f:
     image: yasmincsme/iot-estreito-drone:latest
     container_name: drone_f
     environment:
       DRONE_ID:     "drone_f"
-      BROKER_HOST:  "172.16.201.10"
+      BROKER_HOST:  "172.16.201.3"
       BROKER_PORT:  "3003"
       FAILURE_PROB: "0.08"
     restart: unless-stopped
 
+  # ladica016 — conecta ao broker_4 em ladica011
   drone_g:
     image: yasmincsme/iot-estreito-drone:latest
     container_name: drone_g
     environment:
       DRONE_ID:     "drone_g"
-      BROKER_HOST:  "172.16.201.12"
+      BROKER_HOST:  "172.16.201.11"
       BROKER_PORT:  "3004"
       FAILURE_PROB: "0.08"
     restart: unless-stopped
 
-  # drone_h roda em ladica016 mas conecta ao broker_4 em ladica012
+  # ladica016 — conecta ao broker_4 em ladica011
   drone_h:
     image: yasmincsme/iot-estreito-drone:latest
     container_name: drone_h
     environment:
       DRONE_ID:     "drone_h"
-      BROKER_HOST:  "172.16.201.12"
+      BROKER_HOST:  "172.16.201.11"
       BROKER_PORT:  "3004"
       FAILURE_PROB: "0.08"
     restart: unless-stopped
@@ -237,6 +247,7 @@ services:
   # SENSORES
   # ===========================================================================
 
+  # ladica02
   radar_1:
     image: yasmincsme/iot-estreito-radar:latest
     container_name: radar_setor_1
@@ -247,6 +258,7 @@ services:
       INTERVAL:    "4"
     restart: unless-stopped
 
+  # ladica02
   buoy_1:
     image: yasmincsme/iot-estreito-buoy:latest
     container_name: buoy_setor_1
@@ -257,6 +269,7 @@ services:
       INTERVAL:    "6"
     restart: unless-stopped
 
+  # ladica03
   radar_2:
     image: yasmincsme/iot-estreito-radar:latest
     container_name: radar_setor_2
@@ -267,6 +280,7 @@ services:
       INTERVAL:    "4"
     restart: unless-stopped
 
+  # ladica03
   buoy_2:
     image: yasmincsme/iot-estreito-buoy:latest
     container_name: buoy_setor_2
@@ -277,48 +291,52 @@ services:
       INTERVAL:    "6"
     restart: unless-stopped
 
+  # ladica03
   radar_3:
     image: yasmincsme/iot-estreito-radar:latest
     container_name: radar_setor_3
     environment:
-      BROKER_HOST: "172.16.201.10"
+      BROKER_HOST: "172.16.201.3"
       BROKER_PORT: "3003"
       SECTOR_ID:   "3"
       INTERVAL:    "4"
     restart: unless-stopped
 
+  # ladica03
   buoy_3:
     image: yasmincsme/iot-estreito-buoy:latest
     container_name: buoy_setor_3
     environment:
-      BROKER_HOST: "172.16.201.10"
+      BROKER_HOST: "172.16.201.3"
       BROKER_PORT: "3003"
       SECTOR_ID:   "3"
       INTERVAL:    "6"
     restart: unless-stopped
 
+  # ladica03 — sensores do setor 4 conectam ao broker_4 em ladica011
   radar_4:
     image: yasmincsme/iot-estreito-radar:latest
     container_name: radar_setor_4
     environment:
-      BROKER_HOST: "172.16.201.12"
+      BROKER_HOST: "172.16.201.11"
       BROKER_PORT: "3004"
       SECTOR_ID:   "4"
       INTERVAL:    "4"
     restart: unless-stopped
 
+  # ladica03 — sensores do setor 4 conectam ao broker_4 em ladica011
   buoy_4:
     image: yasmincsme/iot-estreito-buoy:latest
     container_name: buoy_setor_4
     environment:
-      BROKER_HOST: "172.16.201.12"
+      BROKER_HOST: "172.16.201.11"
       BROKER_PORT: "3004"
       SECTOR_ID:   "4"
       INTERVAL:    "6"
     restart: unless-stopped
 
   # ===========================================================================
-  # MONITOR TUI — pode rodar em qualquer máquina
+  # MONITOR TUI — ladica010
   # ===========================================================================
 
   monitor:
@@ -329,9 +347,9 @@ services:
       BROKER_1_PORT: "3001"
       BROKER_2_HOST: "172.16.201.3"
       BROKER_2_PORT: "3002"
-      BROKER_3_HOST: "172.16.201.10"
+      BROKER_3_HOST: "172.16.201.3"
       BROKER_3_PORT: "3003"
-      BROKER_4_HOST: "172.16.201.12"
+      BROKER_4_HOST: "172.16.201.11"
       BROKER_4_PORT: "3004"
       TERM:          "xterm-256color"
     stdin_open: true
